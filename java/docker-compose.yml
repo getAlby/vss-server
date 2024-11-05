@@ -21,7 +21,8 @@ services:
     depends_on:
       - postgres
     ports:
-      - "8080:8080"
+      # prevent conflict with Alby Hub in development
+      - "8090:8080"
     networks:
       - app-network
 
