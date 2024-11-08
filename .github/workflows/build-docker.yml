@@ -23,6 +23,7 @@ jobs:
         with:
           directory: java
           image: ${{ env.IMAGENAME }}
+          dockerfile: java/Dockerfile
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
