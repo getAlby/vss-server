@@ -21,6 +21,7 @@ jobs:
         uses: mr-smithers-excellent/docker-build-push@v5
         id: build
         with:
+          directory: java
           image: ${{ env.IMAGENAME }}
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
