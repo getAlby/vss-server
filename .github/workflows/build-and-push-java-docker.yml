@@ -1,0 +1,29 @@
+name: Build Docker
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY: ghcr.io
+      IMAGENAME: ${{ github.event.repository.name }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Docker build
+        uses: mr-smithers-excellent/docker-build-push@v6
+        id: build
+        with:
+          directory: java
+          image: ${{ env.IMAGENAME }}
+          dockerfile: java/Dockerfile
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
