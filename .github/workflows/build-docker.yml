@@ -9,7 +9,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-
+    env:
+      REGISTRY: ghcr.io
+      IMAGENAME: ${{ github.event.repository.name }}
+      TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
