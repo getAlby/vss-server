@@ -16,6 +16,7 @@ import org.vss.KVStore;
 import org.vss.auth.Authorizer;
 import org.vss.auth.NoopAuthorizer;
 import org.vss.impl.postgres.PostgresBackendImpl;
+import org.vss.auth.JwtAuthorizer;
 
 public class BaseModule extends AbstractModule {
 
@@ -24,8 +25,8 @@ public class BaseModule extends AbstractModule {
     // Provide PostgresBackend as default implementation for KVStore.
     bind(KVStore.class).to(PostgresBackendImpl.class).in(Singleton.class);
 
-    // Default to Noop Authorizer.
-    bind(Authorizer.class).to(NoopAuthorizer.class).in(Singleton.class);
+    // Use JWT Authorizor.
+    bind(Authorizer.class).to(JwtAuthorizer.class).in(Singleton.class);
   }
 
   @Provides
