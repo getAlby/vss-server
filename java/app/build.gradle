@@ -35,17 +35,18 @@ sourceSets {
   }
 }
 
-sentry {
-  // Generates a JVM (Java, Kotlin, etc.) source bundle and uploads your source code to Sentry.
-  // This enables source context, allowing you to see your source
-  // code as part of your stack traces in Sentry.
-  includeSourceContext = true
+if(System.getenv("SENTRY_AUTH_TOKEN") != null) {
+  sentry {
+    // Generates a JVM (Java, Kotlin, etc.) source bundle and uploads your source code to Sentry.
+    // This enables source context, allowing you to see your source
+    // code as part of your stack traces in Sentry.
+    includeSourceContext = true
 
-  org = "getalby"
-  projectName = "albyhub-vss"
-  authToken = System.getenv("SENTRY_AUTH_TOKEN")
+    org = "getalby"
+    projectName = "albyhub-vss"
+    authToken = System.getenv("SENTRY_AUTH_TOKEN")
+  }
 }
-
 group 'org.vss'
 version '1.0'
 
