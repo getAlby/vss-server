@@ -15,6 +15,7 @@ plugins {
   id 'war'
   id 'idea'
   id 'nu.studer.jooq' version '8.0'
+  id "io.sentry.jvm.gradle" version "4.14.1"
 }
 
 repositories {
@@ -32,6 +33,17 @@ sourceSets {
       srcDir '../../proto'
     }
   }
+}
+
+sentry {
+  // Generates a JVM (Java, Kotlin, etc.) source bundle and uploads your source code to Sentry.
+  // This enables source context, allowing you to see your source
+  // code as part of your stack traces in Sentry.
+  includeSourceContext = true
+
+  org = "getalby"
+  projectName = "albyhub-vss"
+  authToken = System.getenv("SENTRY_AUTH_TOKEN")
 }
 
 group 'org.vss'

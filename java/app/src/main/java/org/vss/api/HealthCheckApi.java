@@ -14,6 +14,7 @@ import org.vss.GetObjectResponse;
 import org.vss.KVStore;
 import org.vss.auth.AuthResponse;
 import org.vss.auth.Authorizer;
+import io.sentry.Sentry;
 
 @Path(VssApiEndpoint.HEALTHCHECK)
 @Slf4j
@@ -37,6 +38,7 @@ public class HealthCheckApi {
         .build();
     } catch (Exception e) {
       log.error("Exception in HealthCheckApi: ", e);
+      Sentry.captureException(e);
       return Response.status(500)
         .entity("an unexpected error occurred: " + e.getMessage())
         .build();
