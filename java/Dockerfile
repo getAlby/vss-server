@@ -11,7 +11,7 @@ FROM tomcat:jre17
 
 # Copy WAR file
 COPY --from=builder /build/app/build/libs/vss-1.0.war /usr/local/tomcat/webapps/vss.war
-# Add datadog agent for APM
+# Add datadog tracing library for APM
 ADD 'https://dtdg.co/latest-java-tracer' dd-java-agent.jar
 
 EXPOSE 8080
