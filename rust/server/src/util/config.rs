@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub(crate) struct Config {
 	pub(crate) server_config: ServerConfig,
+	pub(crate) jwt_auth_config: Option<JwtAuthConfig>,
 	pub(crate) postgresql_config: Option<PostgreSQLConfig>,
 }
 
@@ -13,16 +14,27 @@ pub(crate) struct ServerConfig {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct JwtAuthConfig {
+	pub(crate) rsa_pem: String,
+}
+
+#[derive(Deserialize)]
 pub(crate) struct PostgreSQLConfig {
 	pub(crate) username: Option<String>, // Optional in TOML, can be overridden by env
 	pub(crate) password: Option<String>, // Optional in TOML, can be overridden by env
 	pub(crate) host: String,
 	pub(crate) port: u16,
 	pub(crate) database: String,
+	pub(crate) tls: Option<TlsConfig>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct TlsConfig {
+	pub(crate) ca_file: Option<String>,
 }
 
 impl PostgreSQLConfig {
-	pub(crate) fn to_connection_string(&self) -> String {
+	pub(crate) fn to_postgresql_endpoint(&self) -> String {
 		let username_env = std::env::var("VSS_POSTGRESQL_USERNAME");
 		let username = username_env.as_ref()
 			.ok()
@@ -34,10 +46,7 @@ impl PostgreSQLConfig {
 			.or_else(|| self.password.as_ref())
 			.expect("PostgreSQL database password must be provided in config or env var VSS_POSTGRESQL_PASSWORD must be set.");
 
-		format!(
-			"postgresql://{}:{}@{}:{}/{}",
-			username, password, self.host, self.port, self.database
-		)
+		format!("postgresql://{}:{}@{}:{}", username, password, self.host, self.port)
 	}
 }
 

@@ -1,10 +1,11 @@
 [package]
-name = "server"
+name = "vss-server"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 api = { path = "../api" }
+auth-impls = { path = "../auth-impls" }
 impls = { path = "../impls" }
 
 hyper = { version = "1", default-features = false, features = ["server", "http1"] }
