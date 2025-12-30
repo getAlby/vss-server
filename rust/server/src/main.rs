@@ -35,27 +35,32 @@ fn main() {
 		std::process::exit(1);
 	}
 
-	let Config { server_config: ServerConfig { host, port }, jwt_auth_config, postgresql_config } =
-		match util::config::load_config(&args[1]) {
-			Ok(cfg) => cfg,
-			Err(e) => {
-				eprintln!("Failed to load configuration: {}", e);
-				std::process::exit(1);
-			},
-		};
+	let config = match util::config::load_config(&args[1]) {
+		Ok(cfg) => cfg,
+		Err(e) => {
+			eprintln!("Failed to load configuration: {}", e);
+			std::process::exit(1);
+		},
+	};
 
 	// Initialize Sentry before the tokio runtime to ensure proper Hub inheritance
 	// for spawned threads. The guard must be kept alive for the duration of the program.
 	let _sentry_guard = initialize_sentry(&config.sentry_config);
 
-	let addr: SocketAddr =
-		match format!("{}:{}", config.server_config.host, config.server_config.port).parse() {
-			Ok(addr) => addr,
-			Err(e) => {
-				eprintln!("Invalid host/port configuration: {}", e);
-				std::process::exit(1);
-			},
-		};
+	let Config {
+		server_config: ServerConfig { host, port },
+		jwt_auth_config,
+		postgresql_config,
+		..
+	} = config;
+
+	let addr: SocketAddr = match format!("{}:{}", host, port).parse() {
+		Ok(addr) => addr,
+		Err(e) => {
+			eprintln!("Invalid host/port configuration: {}", e);
+			std::process::exit(1);
+		},
+	};
 
 	let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
 		Ok(runtime) => Arc::new(runtime),
@@ -212,7 +217,10 @@ fn initialize_sentry(
 		);
 
 		// Send a test message to verify Sentry is configured correctly
-		sentry::capture_message("VSS server started - Sentry integration test", sentry::Level::Info);
+		sentry::capture_message(
+			"VSS server started - Sentry integration test",
+			sentry::Level::Info,
+		);
 	}
 
 	Some(guard)
