@@ -1,6 +1,6 @@
-name: Build Java Docker
+name: Build Rust Docker
 
-on: [push, pull_request]
+on: [push]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGISTRY: ghcr.io
-      IMAGENAME: ${{ github.event.repository.name }}
+      IMAGENAME: ${{ github.event.repository.name }}-rust
       TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout code
@@ -21,9 +21,9 @@ jobs:
         uses: mr-smithers-excellent/docker-build-push@v6
         id: build
         with:
-          directory: java
+          directory: rust
           image: ${{ env.IMAGENAME }}
-          dockerfile: java/Dockerfile
+          dockerfile: rust/Dockerfile
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}

@@ -55,7 +55,8 @@ impl Authorizer for JWTAuthorizer {
 		&self, headers_map: &HashMap<String, String>,
 	) -> Result<AuthResponse, VssError> {
 		let auth_header = headers_map
-			.get("Authorization")
+			.get("authorization")
+			.or_else(|| headers_map.get("Authorization"))
 			.ok_or(VssError::AuthError("Authorization header not found.".to_string()))?;
 
 		let token = auth_header

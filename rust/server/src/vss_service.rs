@@ -58,7 +58,15 @@ impl Service<Request<Incoming>> for VssService {
 				"/listKeyVersions" => {
 					handle_request(store, authorizer, req, handle_list_object_request).await
 				},
+				"/testSentry" => {
+					// Test endpoint to verify Sentry integration
+					handle_test_sentry_request().await
+				},
 				_ => {
+					sentry::capture_message(
+						&format!("Invalid request path: {}", path),
+						sentry::Level::Warning,
+					);
 					let error_msg = "Invalid request path.".as_bytes();
 					Ok(Response::builder()
 						.status(StatusCode::BAD_REQUEST)
@@ -90,6 +98,25 @@ async fn handle_list_object_request(
 ) -> Result<ListKeyVersionsResponse, VssError> {
 	store.list_key_versions(user_token, request).await
 }
+
+/// Test endpoint to verify Sentry integration is working.
+/// Sends a test error event to Sentry and returns a confirmation message.
+async fn handle_test_sentry_request(
+) -> Result<<VssService as Service<Request<Incoming>>>::Response, hyper::Error> {
+	// Create a test error and capture it
+	let test_error =
+		std::io::Error::new(std::io::ErrorKind::Other, "Test error from /vss/testSentry endpoint");
+	sentry::capture_error(&test_error);
+
+	// Also send a test message
+	sentry::capture_message("Test message from /vss/testSentry endpoint", sentry::Level::Warning);
+
+	let response_body = b"Sentry test events sent. Check your Sentry dashboard.";
+	Ok(Response::builder()
+		.status(StatusCode::OK)
+		.body(Full::new(Bytes::from(response_body.to_vec())))
+		.unwrap())
+}
 async fn handle_request<
 	T: Message + Default,
 	R: Message,
@@ -108,7 +135,13 @@ async fn handle_request<
 
 	let user_token = match authorizer.verify(&headers_map).await {
 		Ok(auth_response) => auth_response.user_token,
-		Err(e) => return Ok(build_error_response(e)),
+		Err(e) => {
+			sentry::capture_message(
+				&format!("Authentication failure: {}", e),
+				sentry::Level::Warning,
+			);
+			return Ok(build_error_response(e));
+		},
 	};
 	// TODO: we should bound the amount of data we read to avoid allocating too much memory.
 	let bytes = body.collect().await?.to_bytes();
@@ -118,13 +151,35 @@ async fn handle_request<
 				.body(Full::new(Bytes::from(response.encode_to_vec())))
 				// unwrap safety: body only errors when previous chained calls failed.
 				.unwrap()),
-			Err(e) => Ok(build_error_response(e)),
+			Err(e) => {
+				match &e {
+					VssError::InternalServerError(msg) => {
+						sentry::capture_message(
+							&format!("Internal server error: {}", msg),
+							sentry::Level::Error,
+						);
+					},
+					_ => {
+						sentry::capture_message(
+							&format!("Request error: {}", e),
+							sentry::Level::Warning,
+						);
+					},
+				}
+				Ok(build_error_response(e))
+			},
 		},
-		Err(_) => Ok(Response::builder()
-			.status(StatusCode::BAD_REQUEST)
-			.body(Full::new(Bytes::from(b"Error parsing request".to_vec())))
-			// unwrap safety: body only errors when previous chained calls failed.
-			.unwrap()),
+		Err(e) => {
+			sentry::capture_message(
+				&format!("Error parsing protobuf request: {}", e),
+				sentry::Level::Warning,
+			);
+			Ok(Response::builder()
+				.status(StatusCode::BAD_REQUEST)
+				.body(Full::new(Bytes::from(b"Error parsing request".to_vec())))
+				// unwrap safety: body only errors when previous chained calls failed.
+				.unwrap())
+		},
 	}
 }
 
