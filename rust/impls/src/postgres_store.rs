@@ -71,7 +71,7 @@ where
 	T::TlsConnect: Send,
 	<<T as MakeTlsConnect<Socket>>::TlsConnect as TlsConnect<Socket>>::Future: Send,
 {
-	let dsn = format!("{}/{}", postgres_endpoint, "postgres");
+	let dsn = format!("{}/{}", postgres_endpoint, "defaultdb");
 	let (client, connection) = tokio_postgres::connect(&dsn, tls)
 		.await
 		.map_err(|e| Error::new(ErrorKind::Other, format!("Connection error: {}", e)))?;
