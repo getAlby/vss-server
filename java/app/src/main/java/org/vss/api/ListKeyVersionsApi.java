@@ -14,6 +14,7 @@ import org.vss.ListKeyVersionsRequest;
 import org.vss.ListKeyVersionsResponse;
 import org.vss.auth.AuthResponse;
 import org.vss.auth.Authorizer;
+import io.sentry.Sentry;
 
 @Path(VssApiEndpoint.LIST_KEY_VERSIONS)
 @Slf4j
@@ -34,6 +35,7 @@ public class ListKeyVersionsApi extends AbstractVssApi {
       return toResponse(response);
     } catch (Exception e) {
       log.error("Exception in ListKeyVersionsApi: ", e);
+      Sentry.captureException(e);
       return toErrorResponse(e);
     }
   }

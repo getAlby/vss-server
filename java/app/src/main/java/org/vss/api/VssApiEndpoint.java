@@ -1,6 +1,7 @@
 package org.vss.api;
 
 public class VssApiEndpoint {
+  public static final String HEALTHCHECK = "/health";
   public static final String GET_OBJECT = "/getObject";
   public static final String PUT_OBJECTS = "/putObjects";
   public static final String DELETE_OBJECT = "/deleteObject";

@@ -11,4 +11,6 @@ public interface KVStore {
   DeleteObjectResponse delete(String userToken, DeleteObjectRequest request);
 
   ListKeyVersionsResponse listKeyVersions(String userToken, ListKeyVersionsRequest request);
+
+  void checkHealth();
 }
