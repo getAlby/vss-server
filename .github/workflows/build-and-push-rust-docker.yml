@@ -1,6 +1,6 @@
 name: Build Rust Docker
 
-on: [push, pull_request]
+on: [push]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REGISTRY: ghcr.io
-      IMAGENAME: ${{ github.event.repository.name }}
-      TAG: rust-${{ github.ref_name }}
+      IMAGENAME: ${{ github.event.repository.name }}-rust
+      TAG: ${{ github.ref_name }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
