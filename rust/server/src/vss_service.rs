@@ -63,6 +63,10 @@ impl Service<Request<Incoming>> for VssService {
 					handle_test_sentry_request().await
 				},
 				_ => {
+					sentry::capture_message(
+						&format!("Invalid request path: {}", path),
+						sentry::Level::Warning,
+					);
 					let error_msg = "Invalid request path.".as_bytes();
 					Ok(Response::builder()
 						.status(StatusCode::BAD_REQUEST)
@@ -165,11 +169,17 @@ async fn handle_request<
 				Ok(build_error_response(e))
 			},
 		},
-		Err(_) => Ok(Response::builder()
-			.status(StatusCode::BAD_REQUEST)
-			.body(Full::new(Bytes::from(b"Error parsing request".to_vec())))
-			// unwrap safety: body only errors when previous chained calls failed.
-			.unwrap()),
+		Err(e) => {
+			sentry::capture_message(
+				&format!("Error parsing protobuf request: {}", e),
+				sentry::Level::Warning,
+			);
+			Ok(Response::builder()
+				.status(StatusCode::BAD_REQUEST)
+				.body(Full::new(Bytes::from(b"Error parsing request".to_vec())))
+				// unwrap safety: body only errors when previous chained calls failed.
+				.unwrap())
+		},
 	}
 }
 
