@@ -14,6 +14,7 @@ import org.vss.GetObjectResponse;
 import org.vss.KVStore;
 import org.vss.auth.AuthResponse;
 import org.vss.auth.Authorizer;
+import io.sentry.Sentry;
 
 @Path(VssApiEndpoint.GET_OBJECT)
 @Slf4j
@@ -34,6 +35,7 @@ public class GetObjectApi extends AbstractVssApi {
       return toResponse(response);
     } catch (Exception e) {
       log.error("Exception in GetObjectApi: ", e);
+      Sentry.captureException(e);
       return toErrorResponse(e);
     }
   }

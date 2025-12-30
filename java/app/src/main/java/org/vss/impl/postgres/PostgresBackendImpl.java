@@ -48,6 +48,20 @@ public class PostgresBackendImpl implements KVStore {
   }
 
   @Override
+  public void checkHealth() {
+    OffsetDateTime yesterday = OffsetDateTime.now().minusDays(1);
+
+    VssDbRecord vssDbRecord = context.selectFrom(VSS_DB)
+        .where(VSS_DB.LAST_UPDATED_AT.gt(yesterday))
+        .limit(1)
+        .fetchOne();
+    
+    if (vssDbRecord == null) {
+        throw new IllegalStateException("No recent records found");
+    }
+  }
+
+  @Override
   public GetObjectResponse get(String userToken, GetObjectRequest request) {
 
     VssDbRecord vssDbRecord = context.selectFrom(VSS_DB)

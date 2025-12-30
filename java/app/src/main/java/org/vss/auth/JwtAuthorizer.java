@@ -35,6 +35,10 @@ public class JwtAuthorizer implements Authorizer {
 		this.verifier = JWT.require(algorithm).build();
 	}
 
+	public JwtAuthorizer() throws Exception {
+		this(System.getenv("vss.jwt.pubkey"));
+	}
+
 	@Override
 	public AuthResponse verify(HttpHeaders headers) throws AuthException {
 

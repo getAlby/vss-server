@@ -14,6 +14,7 @@ import org.vss.PutObjectRequest;
 import org.vss.PutObjectResponse;
 import org.vss.auth.AuthResponse;
 import org.vss.auth.Authorizer;
+import io.sentry.Sentry;
 
 @Path(VssApiEndpoint.PUT_OBJECTS)
 @Slf4j
@@ -34,6 +35,7 @@ public class PutObjectsApi extends AbstractVssApi {
       return toResponse(response);
     } catch (Exception e) {
       log.error("Exception in PutObjectsApi: ", e);
+      Sentry.captureException(e);
       return toErrorResponse(e);
     }
   }

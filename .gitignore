@@ -14,3 +14,6 @@ app/.classpath
 app/.project
 app/.settings
 
+java/.gradle
+java/app/build
+java/gradle
