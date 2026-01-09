@@ -159,6 +159,10 @@ async fn handle_request<
 							sentry::Level::Error,
 						);
 					},
+					VssError::NoSuchKeyError(_) => {
+						// NoSuchKeyError is a normal case when a key doesn't exist (404).
+						// Don't send these to Sentry as they're expected errors.
+					},
 					_ => {
 						sentry::capture_message(
 							&format!("Request error: {}", e),
