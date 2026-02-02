@@ -234,7 +234,11 @@ async fn handle_request<
 				let response_bytes = response.encode_to_vec();
 				Span::current().record("http.response.body.size", response_bytes.len());
 				Span::current().record("http.status_code", 200);
-				tracing::info!(http.status_code = 200, operation = operation_name, "Request completed successfully");
+				tracing::info!(
+					http.status_code = 200,
+					operation = operation_name,
+					"Request completed successfully"
+				);
 				Ok(Response::builder()
 					.body(Full::new(Bytes::from(response_bytes)))
 					// unwrap safety: body only errors when previous chained calls failed.
