@@ -36,15 +36,32 @@ mod vss_service;
 
 fn main() {
 	let args: Vec<String> = std::env::args().collect();
+	if args.len() != 2 {
+		eprintln!("Usage: {} <config-file-path>", args[0]);
+		std::process::exit(1);
+	}
 
-	let config =
-		util::config::load_configuration(args.get(1).map(|s| s.as_str())).unwrap_or_else(|e| {
+	let config = match util::config::load_config(&args[1]) {
+		Ok(cfg) => cfg,
+		Err(e) => {
 			eprintln!("Failed to load configuration: {}", e);
-			std::process::exit(-1);
-		});
+			std::process::exit(1);
+		},
+	};
 
-	let logger = match ServerLogger::init(config.log_level, &config.log_file) {
-		Ok(logger) => logger,
+	// Initialize Sentry before the tokio runtime to ensure proper Hub inheritance
+	// for spawned threads. The guard must be kept alive for the duration of the program.
+	let _sentry_guard = initialize_sentry(&config.sentry_config);
+
+	let Config {
+		server_config: ServerConfig { host, port },
+		jwt_auth_config,
+		postgresql_config,
+		..
+	} = config;
+
+	let addr: SocketAddr = match format!("{}:{}", host, port).parse() {
+		Ok(addr) => addr,
 		Err(e) => {
 			eprintln!("Failed to initialize logger: {e}");
 			std::process::exit(-1);
@@ -188,4 +205,46 @@ fn main() {
 			}
 		}
 	});
+}
+
+/// Initializes Sentry error tracking if configured.
+///
+/// Sentry must be initialized before the tokio runtime starts to ensure proper
+/// Hub inheritance for spawned threads. Returns a guard that must be kept alive
+/// for the duration of the program to ensure events are flushed on shutdown.
+fn initialize_sentry(
+	sentry_config: &Option<util::config::SentryConfig>,
+) -> Option<sentry::ClientInitGuard> {
+	let config = match sentry_config {
+		Some(cfg) => cfg,
+		None => return None,
+	};
+
+	let dsn = match config.get_dsn() {
+		Some(dsn) if !dsn.is_empty() => dsn,
+		_ => return None,
+	};
+
+	let environment = config.get_environment();
+	let sample_rate = config.get_sample_rate();
+
+	let guard = sentry::init((
+		dsn,
+		sentry::ClientOptions {
+			release: sentry::release_name!(),
+			environment: environment.map(std::borrow::Cow::Owned),
+			sample_rate,
+			..Default::default()
+		},
+	));
+
+	if guard.is_enabled() {
+		println!(
+			"Sentry initialized (environment: {}, sample_rate: {})",
+			config.get_environment().unwrap_or_else(|| "default".to_string()),
+			sample_rate
+		);
+	}
+
+	Some(guard)
 }

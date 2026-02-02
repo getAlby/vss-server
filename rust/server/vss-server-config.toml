@@ -29,3 +29,10 @@ vss_database = "vss"           # Optional in TOML, can be overridden by env var 
 # [log_config]
 # level = "debug"    # Uncomment, or set env var `VSS_LOG_LEVEL` to set the log level, the default is "debug"
 # file = "vss.log"   # Uncomment, or set env var `VSS_LOG_FILE` to set the log file path, the default is "vss.log"
+
+# Sentry Configuration (optional)
+# Uncomment and configure to enable error tracking with Sentry
+# [sentry_config]
+# dsn = "https://your-sentry-dsn@sentry.io/project-id"  # Optional, can be overridden by env var `SENTRY_DSN`
+# environment = "development"                           # Optional, can be overridden by env var `SENTRY_ENVIRONMENT`
+# sample_rate = 1.0                                     # Optional, can be overridden by env var `SENTRY_SAMPLE_RATE` (0.0 to 1.0)
