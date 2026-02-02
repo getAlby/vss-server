@@ -17,6 +17,7 @@ use std::cmp::min;
 use std::io::{self, Error, ErrorKind};
 use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
 use tokio_postgres::{error, Client, NoTls, Socket, Transaction};
+use tracing::instrument;
 
 pub use native_tls::Certificate;
 
@@ -442,6 +443,18 @@ where
 	T::TlsConnect: Send,
 	<T::TlsConnect as TlsConnect<Socket>>::Future: Send,
 {
+	#[instrument(
+		name = "postgres.get",
+		skip(self, user_token, request),
+		fields(
+			db.system = "postgresql",
+			db.operation = "SELECT",
+			db.statement = "SELECT key, value, version FROM vss_db WHERE user_token = ? AND store_id = ? AND key = ?",
+			span.type = "sql",
+			store_id = %request.store_id,
+			key = %request.key
+		)
+	)]
 	async fn get(
 		&self, user_token: String, request: GetObjectRequest,
 	) -> Result<GetObjectResponse, VssError> {
@@ -457,25 +470,44 @@ where
 			.map_err(|e| Error::new(ErrorKind::Other, format!("Query error: {}", e)))?;
 
 		let key_value = if let Some(row) = row {
+			tracing::debug!(found = true, "Record found in database");
 			KeyValue {
 				key: row.get(KEY_COLUMN),
 				value: Bytes::from(row.get::<_, Vec<u8>>(VALUE_COLUMN)),
 				version: row.get(VERSION_COLUMN),
 			}
 		} else if request.key == GLOBAL_VERSION_KEY {
+			tracing::debug!(found = false, "Global version key not found, returning default");
 			KeyValue { key: GLOBAL_VERSION_KEY.to_string(), value: Bytes::new(), version: 0 }
 		} else {
+			tracing::debug!(found = false, "Key not found");
 			return Err(VssError::NoSuchKeyError("Requested key not found.".to_string()));
 		};
 		Ok(GetObjectResponse { value: Some(key_value) })
 	}
 
+	#[instrument(
+		name = "postgres.put",
+		skip(self, user_token, request),
+		fields(
+			db.system = "postgresql",
+			db.operation = "INSERT/UPDATE",
+			span.type = "sql",
+			store_id = %request.store_id,
+			transaction_items_count = %request.transaction_items.len(),
+			delete_items_count = %request.delete_items.len()
+		)
+	)]
 	async fn put(
 		&self, user_token: String, request: PutObjectRequest,
 	) -> Result<PutObjectResponse, VssError> {
 		let store_id = request.store_id;
 		if request.transaction_items.len() + request.delete_items.len() > MAX_PUT_REQUEST_ITEM_COUNT
 		{
+			tracing::warn!(
+				max_allowed = MAX_PUT_REQUEST_ITEM_COUNT,
+				"Request rejected: too many items"
+			);
 			return Err(VssError::InvalidRequestError(format!(
 				"Number of write items per request should be less than equal to {}",
 				MAX_PUT_REQUEST_ITEM_COUNT
@@ -511,10 +543,20 @@ where
 			.get()
 			.await
 			.map_err(|e| Error::new(ErrorKind::Other, format!("Connection error: {}", e)))?;
+
+		let transaction_span = tracing::info_span!(
+			"postgres.transaction",
+			db.system = "postgresql",
+			span.type = "sql"
+		);
+		let _guard = transaction_span.enter();
+
 		let transaction = conn
 			.transaction()
 			.await
 			.map_err(|e| Error::new(ErrorKind::Other, format!("Transaction start error: {}", e)))?;
+
+		tracing::debug!("Transaction started");
 
 		let mut batch_results = Vec::new();
 
@@ -530,6 +572,7 @@ where
 
 		for num_rows in batch_results {
 			if num_rows == 0 {
+				tracing::warn!("Transaction rolled back due to conflict");
 				transaction.rollback().await.map_err(|e| {
 					Error::new(ErrorKind::Other, format!("Transaction rollback error: {}", e))
 				})?;
@@ -542,14 +585,26 @@ where
 		transaction.commit().await.map_err(|e| {
 			Error::new(ErrorKind::Other, format!("Transaction commit error: {}", e))
 		})?;
+		tracing::debug!("Transaction committed successfully");
 		Ok(PutObjectResponse {})
 	}
 
+	#[instrument(
+		name = "postgres.delete",
+		skip(self, user_token, request),
+		fields(
+			db.system = "postgresql",
+			db.operation = "DELETE",
+			span.type = "sql",
+			store_id = %request.store_id
+		)
+	)]
 	async fn delete(
 		&self, user_token: String, request: DeleteObjectRequest,
 	) -> Result<DeleteObjectResponse, VssError> {
 		let store_id = request.store_id;
 		let key_value = request.key_value.ok_or_else(|| {
+			tracing::warn!("Delete request missing key_value");
 			VssError::InvalidRequestError("key_value missing in DeleteObjectRequest".to_string())
 		})?;
 		let vss_record = self.build_vss_record(user_token, store_id, key_value);
@@ -567,6 +622,7 @@ where
 		let num_rows = self.execute_delete_object_query(&transaction, &vss_record).await?;
 
 		if num_rows == 0 {
+			tracing::debug!(rows_affected = 0, "No rows deleted, rolling back");
 			transaction.rollback().await.map_err(|e| {
 				Error::new(ErrorKind::Other, format!("Transaction rollback error: {}", e))
 			})?;
@@ -576,9 +632,23 @@ where
 		transaction.commit().await.map_err(|e| {
 			Error::new(ErrorKind::Other, format!("Transaction commit error: {}", e))
 		})?;
+		tracing::debug!(rows_affected = num_rows, "Delete completed successfully");
 		Ok(DeleteObjectResponse {})
 	}
 
+	#[instrument(
+		name = "postgres.list_key_versions",
+		skip(self, user_token, request),
+		fields(
+			db.system = "postgresql",
+			db.operation = "SELECT",
+			db.statement = "SELECT key, version FROM vss_db WHERE user_token = ? AND store_id = ? AND key > ? AND key LIKE ? ORDER BY key LIMIT ?",
+			span.type = "sql",
+			store_id = %request.store_id,
+			key_prefix = ?request.key_prefix,
+			page_size = ?request.page_size
+		)
+	)]
 	async fn list_key_versions(
 		&self, user_token: String, request: ListKeyVersionsRequest,
 	) -> Result<ListKeyVersionsResponse, VssError> {
@@ -630,6 +700,12 @@ where
 				version: row.get(VERSION_COLUMN),
 			})
 			.collect();
+
+		tracing::debug!(
+			keys_returned = key_versions.len(),
+			global_version = ?global_version,
+			"List key versions completed"
+		);
 
 		let mut next_page_token = Some("".to_string());
 		if !key_versions.is_empty() {

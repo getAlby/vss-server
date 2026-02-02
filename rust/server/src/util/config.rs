@@ -6,6 +6,7 @@ pub(crate) struct Config {
 	pub(crate) jwt_auth_config: Option<JwtAuthConfig>,
 	pub(crate) postgresql_config: Option<PostgreSQLConfig>,
 	pub(crate) sentry_config: Option<SentryConfig>,
+	pub(crate) datadog_config: Option<DatadogConfig>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -30,6 +31,82 @@ impl SentryConfig {
 			.and_then(|s| s.parse().ok())
 			.or(self.sample_rate)
 			.unwrap_or(1.0)
+	}
+}
+
+/// Configuration for Datadog APM tracing.
+#[derive(Deserialize, Clone)]
+pub(crate) struct DatadogConfig {
+	/// Whether Datadog tracing is enabled. Defaults to true if config section is present.
+	/// Can be overridden by env var `DD_TRACE_ENABLED`
+	pub(crate) enabled: Option<bool>,
+	/// The service name for traces. Defaults to "vss-server".
+	/// Can be overridden by env var `DD_SERVICE`
+	pub(crate) service: Option<String>,
+	/// The environment name (e.g., "production", "staging", "development").
+	/// Can be overridden by env var `DD_ENV`
+	pub(crate) env: Option<String>,
+	/// The version of the service.
+	/// Can be overridden by env var `DD_VERSION`
+	pub(crate) version: Option<String>,
+	/// The Datadog Agent host. Defaults to "localhost".
+	/// Can be overridden by env var `DD_AGENT_HOST`
+	pub(crate) agent_host: Option<String>,
+	/// The Datadog Agent trace port. Defaults to 8126.
+	/// Can be overridden by env var `DD_TRACE_AGENT_PORT`
+	pub(crate) agent_port: Option<u16>,
+}
+
+impl DatadogConfig {
+	pub(crate) fn is_enabled(&self) -> bool {
+		std::env::var("DD_TRACE_ENABLED")
+			.ok()
+			.and_then(|s| s.parse().ok())
+			.or(self.enabled)
+			.unwrap_or(true)
+	}
+
+	pub(crate) fn get_service(&self) -> String {
+		std::env::var("DD_SERVICE")
+			.ok()
+			.or_else(|| self.service.clone())
+			.unwrap_or_else(|| "vss-server".to_string())
+	}
+
+	pub(crate) fn get_env(&self) -> Option<String> {
+		std::env::var("DD_ENV").ok().or_else(|| self.env.clone())
+	}
+
+	pub(crate) fn get_version(&self) -> Option<String> {
+		std::env::var("DD_VERSION").ok().or_else(|| self.version.clone())
+	}
+
+	pub(crate) fn get_agent_host(&self) -> String {
+		std::env::var("DD_AGENT_HOST")
+			.ok()
+			.or_else(|| self.agent_host.clone())
+			.unwrap_or_else(|| "localhost".to_string())
+	}
+
+	pub(crate) fn get_agent_port(&self) -> u16 {
+		std::env::var("DD_TRACE_AGENT_PORT")
+			.ok()
+			.and_then(|s| s.parse().ok())
+			.or(self.agent_port)
+			.unwrap_or(8126)
+	}
+}
+
+impl Default for DatadogConfig {
+	fn default() -> Self {
+		Self {
+			enabled: Some(true),
+			service: Some("vss-server".to_string()),
+			env: None,
+			version: None,
+			agent_host: Some("localhost".to_string()),
+			agent_port: Some(8126),
+		}
 	}
 }
 

@@ -32,3 +32,13 @@ database = "postgres"
 # dsn = "https://your-sentry-dsn@sentry.io/project-id"  # Optional, can be overridden by env var `SENTRY_DSN`
 # environment = "development"                           # Optional, can be overridden by env var `SENTRY_ENVIRONMENT`
 # sample_rate = 1.0                                     # Optional, can be overridden by env var `SENTRY_SAMPLE_RATE` (0.0 to 1.0)
+
+# Datadog APM Configuration (optional)
+# Uncomment and configure to enable distributed tracing with Datadog APM
+# [datadog_config]
+# enabled = true                   # Optional, can be overridden by env var `DD_TRACE_ENABLED`
+# service = "vss-server"           # Optional, can be overridden by env var `DD_SERVICE`
+# env = "development"              # Optional, can be overridden by env var `DD_ENV`
+# version = "0.1.0"                # Optional, can be overridden by env var `DD_VERSION`
+# agent_host = "localhost"         # Optional, can be overridden by env var `DD_AGENT_HOST`
+# agent_port = 8126                # Optional, can be overridden by env var `DD_TRACE_AGENT_PORT`
