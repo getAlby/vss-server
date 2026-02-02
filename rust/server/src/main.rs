@@ -9,6 +9,7 @@
 #![deny(rustdoc::private_intra_doc_links)]
 #![deny(missing_docs)]
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
@@ -29,7 +30,11 @@ use auth_impls::jwt::JWTAuthorizer;
 use auth_impls::signature::SignatureValidatingAuthorizer;
 use impls::postgres_store::{PostgresPlaintextBackend, PostgresTlsBackend};
 use util::logger::ServerLogger;
+use util::config::{Config, DatadogConfig, ServerConfig};
 use vss_service::VssService;
+
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 mod util;
 mod vss_service;
@@ -52,6 +57,9 @@ fn main() {
 	// Initialize Sentry before the tokio runtime to ensure proper Hub inheritance
 	// for spawned threads. The guard must be kept alive for the duration of the program.
 	let _sentry_guard = initialize_sentry(&config.sentry_config);
+
+	// Initialize Datadog APM tracing
+	initialize_datadog(&config.datadog_config);
 
 	let Config {
 		server_config: ServerConfig { host, port },
@@ -247,4 +255,61 @@ fn initialize_sentry(
 	}
 
 	Some(guard)
+}
+
+/// Initializes Datadog APM tracing if configured.
+///
+/// This sets up the tracing subscriber with Datadog's tracing layer to send
+/// traces to the Datadog Agent. The layer is responsible for collecting spans
+/// and sending them to the Datadog Agent.
+fn initialize_datadog(datadog_config: &Option<DatadogConfig>) {
+	let config = datadog_config.clone().unwrap_or_default();
+
+	if !config.is_enabled() {
+		println!("Datadog tracing is disabled");
+		// Initialize a basic subscriber without Datadog layer
+		tracing_subscriber::registry().init();
+		return;
+	}
+
+	let service = config.get_service();
+	let agent_host = config.get_agent_host();
+	let agent_port = config.get_agent_port();
+	let agent_address = format!("{}:{}", agent_host, agent_port);
+	let env = config.get_env();
+	let version = config.get_version();
+
+	// Build the Datadog tracing layer
+	let mut builder = tracing_datadog::DatadogTraceLayer::builder()
+		.service(&service)
+		.agent_address(&agent_address);
+
+	if let Some(ref env_str) = env {
+		builder = builder.env(env_str);
+	}
+
+	if let Some(ref version_str) = version {
+		builder = builder.version(version_str);
+	}
+
+	let layer = match builder.build() {
+		Ok(layer) => layer,
+		Err(e) => {
+			eprintln!("Failed to initialize Datadog tracing: {}", e);
+			// Initialize a basic subscriber without Datadog layer
+			tracing_subscriber::registry().init();
+			return;
+		},
+	};
+
+	// Initialize the tracing subscriber with the Datadog layer
+	tracing_subscriber::registry().with(layer).init();
+
+	println!(
+		"Datadog APM tracing initialized (service: {}, agent: {}, env: {}, version: {})",
+		service,
+		agent_address,
+		env.unwrap_or_else(|| "not set".to_string()),
+		version.unwrap_or_else(|| "not set".to_string())
+	);
 }

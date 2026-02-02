@@ -15,6 +15,9 @@ native-tls = { version = "0.2.14", default-features = false }
 postgres-native-tls = { version = "0.5.2", default-features = false, features = ["runtime"] }
 log = { version = "0.4.29", default-features = false }
 
+# Datadog APM tracing
+tracing = "0.1"
+
 [dev-dependencies]
 tokio = { version = "1.38.0", default-features = false, features = ["rt-multi-thread", "macros"] }
 api = { path = "../api", features = ["_test_utils"] }
