@@ -5,7 +5,7 @@ use hyper::{Request, Response, StatusCode};
 use std::collections::HashMap;
 
 use prost::Message;
-use tracing::{instrument, Span};
+use tracing::{instrument, Instrument, Span};
 
 use api::auth::Authorizer;
 use api::error::VssError;
@@ -44,67 +44,72 @@ impl Service<Request<Incoming>> for VssService {
 		let path = req.uri().path().to_owned();
 		let method = req.method().to_string();
 
-		Box::pin(async move {
-			let prefix_stripped_path = path.strip_prefix(BASE_PATH_PREFIX).unwrap_or_default();
+		let prefix_stripped_path = path.strip_prefix(BASE_PATH_PREFIX).unwrap_or_default().to_owned();
 
-			// Create a root span for the HTTP request
-			let span = tracing::info_span!(
-				"http.request",
-				http.method = %method,
-				http.url = %path,
-				http.route = %prefix_stripped_path,
-				span.type = "web",
-				resource.name = %format!("{} {}", method, prefix_stripped_path),
-			);
-			let _guard = span.enter();
+		// Create a root span for the HTTP request
+		let span = tracing::info_span!(
+			"http.request",
+			http.method = %method,
+			http.url = %path,
+			http.route = %prefix_stripped_path,
+			span.type = "web",
+			resource.name = %format!("{} {}", method, prefix_stripped_path),
+		);
 
-			match prefix_stripped_path {
-				"/getObject" => {
-					handle_request(store, authorizer, req, "getObject", handle_get_object_request)
+		// Use .instrument(span) instead of span.enter() for async code.
+		// span.enter() is not safe across .await points as the future may
+		// resume on a different thread, causing span lifecycle issues.
+		Box::pin(
+			async move {
+				match prefix_stripped_path.as_str() {
+					"/getObject" => {
+						handle_request(store, authorizer, req, "getObject", handle_get_object_request)
+							.await
+					},
+					"/putObjects" => {
+						handle_request(store, authorizer, req, "putObjects", handle_put_object_request)
+							.await
+					},
+					"/deleteObject" => {
+						handle_request(
+							store,
+							authorizer,
+							req,
+							"deleteObject",
+							handle_delete_object_request,
+						)
 						.await
-				},
-				"/putObjects" => {
-					handle_request(store, authorizer, req, "putObjects", handle_put_object_request)
+					},
+					"/listKeyVersions" => {
+						handle_request(
+							store,
+							authorizer,
+							req,
+							"listKeyVersions",
+							handle_list_object_request,
+						)
 						.await
-				},
-				"/deleteObject" => {
-					handle_request(
-						store,
-						authorizer,
-						req,
-						"deleteObject",
-						handle_delete_object_request,
-					)
-					.await
-				},
-				"/listKeyVersions" => {
-					handle_request(
-						store,
-						authorizer,
-						req,
-						"listKeyVersions",
-						handle_list_object_request,
-					)
-					.await
-				},
-				"/testSentry" => {
-					// Test endpoint to verify Sentry integration
-					handle_test_sentry_request().await
-				},
-				_ => {
-					sentry::capture_message(
-						&format!("Invalid request path: {}", path),
-						sentry::Level::Warning,
-					);
-					tracing::warn!(http.status_code = 400, "Invalid request path: {}", path);
-					let error_msg = "Invalid request path.".as_bytes();
-					Ok(Response::builder()
-						.status(StatusCode::BAD_REQUEST)
-						.body(Full::new(Bytes::from(error_msg)))
-						.unwrap())
-				},
+					},
+					"/testSentry" => {
+						// Test endpoint to verify Sentry integration
+						handle_test_sentry_request().await
+					},
+					_ => {
+						sentry::capture_message(
+							&format!("Invalid request path: {}", prefix_stripped_path),
+							sentry::Level::Warning,
+						);
+						tracing::warn!(http.status_code = 400, "Invalid request path: {}", prefix_stripped_path);
+						let error_msg = "Invalid request path.".as_bytes();
+						Ok(Response::builder()
+							.status(StatusCode::BAD_REQUEST)
+							.body(Full::new(Bytes::from(error_msg)))
+							.unwrap())
+					},
+				}
 			}
-		})
+			.instrument(span),
+		)
 	}
 }
 
@@ -202,24 +207,25 @@ async fn handle_request<
 		.map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or_default().to_string()))
 		.collect::<HashMap<String, String>>();
 
-	// Create a span for authentication
+	// Create a span for authentication and use .instrument() for async-safety
 	let auth_span = tracing::info_span!("auth.verify", span.type = "auth");
-	let user_token = {
-		let _guard = auth_span.enter();
-		match authorizer.verify(&headers_map).await {
-			Ok(auth_response) => {
-				tracing::info!("Authentication successful");
-				auth_response.user_token
-			},
-			Err(e) => {
-				sentry::capture_message(
-					&format!("Authentication failure: {}", e),
-					sentry::Level::Warning,
-				);
-				tracing::warn!(error = %e, "Authentication failure");
-				return Ok(build_error_response(e));
-			},
-		}
+	let user_token = match authorizer
+		.verify(&headers_map)
+		.instrument(auth_span)
+		.await
+	{
+		Ok(auth_response) => {
+			tracing::info!("Authentication successful");
+			auth_response.user_token
+		},
+		Err(e) => {
+			sentry::capture_message(
+				&format!("Authentication failure: {}", e),
+				sentry::Level::Warning,
+			);
+			tracing::warn!(error = %e, "Authentication failure");
+			return Ok(build_error_response(e));
+		},
 	};
 
 	// TODO: we should bound the amount of data we read to avoid allocating too much memory.

@@ -17,7 +17,7 @@ use std::cmp::min;
 use std::io::{self, Error, ErrorKind};
 use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
 use tokio_postgres::{error, Client, NoTls, Socket, Transaction};
-use tracing::instrument;
+use tracing::{instrument, Instrument};
 
 pub use native_tls::Certificate;
 
@@ -549,44 +549,49 @@ where
 			db.system = "postgresql",
 			span.type = "sql"
 		);
-		let _guard = transaction_span.enter();
 
-		let transaction = conn
-			.transaction()
-			.await
-			.map_err(|e| Error::new(ErrorKind::Other, format!("Transaction start error: {}", e)))?;
+		// Use an async block with .instrument() instead of span.enter()
+		// to avoid span lifecycle issues across .await points
+		async {
+			let transaction = conn
+				.transaction()
+				.await
+				.map_err(|e| Error::new(ErrorKind::Other, format!("Transaction start error: {}", e)))?;
 
-		tracing::debug!("Transaction started");
+			tracing::debug!("Transaction started");
 
-		let mut batch_results = Vec::new();
+			let mut batch_results = Vec::new();
 
-		for vss_record in &vss_put_records {
-			let num_rows = self.execute_put_object_query(&transaction, vss_record).await?;
-			batch_results.push(num_rows);
-		}
-
-		for vss_record in &vss_delete_records {
-			let num_rows = self.execute_delete_object_query(&transaction, vss_record).await?;
-			batch_results.push(num_rows);
-		}
-
-		for num_rows in batch_results {
-			if num_rows == 0 {
-				tracing::warn!("Transaction rolled back due to conflict");
-				transaction.rollback().await.map_err(|e| {
-					Error::new(ErrorKind::Other, format!("Transaction rollback error: {}", e))
-				})?;
-				return Err(VssError::ConflictError(
-					"Transaction could not be completed due to a possible conflict".to_string(),
-				));
+			for vss_record in &vss_put_records {
+				let num_rows = self.execute_put_object_query(&transaction, vss_record).await?;
+				batch_results.push(num_rows);
 			}
-		}
 
-		transaction.commit().await.map_err(|e| {
-			Error::new(ErrorKind::Other, format!("Transaction commit error: {}", e))
-		})?;
-		tracing::debug!("Transaction committed successfully");
-		Ok(PutObjectResponse {})
+			for vss_record in &vss_delete_records {
+				let num_rows = self.execute_delete_object_query(&transaction, vss_record).await?;
+				batch_results.push(num_rows);
+			}
+
+			for num_rows in batch_results {
+				if num_rows == 0 {
+					tracing::warn!("Transaction rolled back due to conflict");
+					transaction.rollback().await.map_err(|e| {
+						Error::new(ErrorKind::Other, format!("Transaction rollback error: {}", e))
+					})?;
+					return Err(VssError::ConflictError(
+						"Transaction could not be completed due to a possible conflict".to_string(),
+					));
+				}
+			}
+
+			transaction.commit().await.map_err(|e| {
+				Error::new(ErrorKind::Other, format!("Transaction commit error: {}", e))
+			})?;
+			tracing::debug!("Transaction committed successfully");
+			Ok(PutObjectResponse {})
+		}
+		.instrument(transaction_span)
+		.await
 	}
 
 	#[instrument(
