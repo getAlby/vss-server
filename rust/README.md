@@ -67,26 +67,14 @@ The Datadog integration provides:
 
 #### Configuration
 
-1. **Via Configuration File**: Add the following to your `vss-server-config.toml`:
-   ```toml
-   [datadog_config]
-   enabled = true                   # Enable/disable tracing (default: true when section is present)
-   service = "vss-server"           # Service name in Datadog
-   env = "production"               # Environment (e.g., "production", "staging", "development")
-   version = "0.1.0"                # Application version
-   agent_host = "localhost"         # Datadog Agent host
-   agent_port = 8126                # Datadog Agent APM port
-   ```
+Datadog tracing is configured via environment variables only:
 
-2. **Via Environment Variables** (recommended for production):
-   - `DD_TRACE_ENABLED`: Enable/disable tracing ("true" or "false")
-   - `DD_SERVICE`: Service name
-   - `DD_ENV`: Environment name
-   - `DD_VERSION`: Application version
-   - `DD_AGENT_HOST`: Datadog Agent host
-   - `DD_TRACE_AGENT_PORT`: Datadog Agent APM port (default: 8126)
-
-   Environment variables take precedence over configuration file values.
+- `DD_TRACE_ENABLED`: Enable/disable tracing ("true" or "false", default: false)
+- `DD_SERVICE`: Service name (default: `vss-server`)
+- `DD_ENV`: Environment name
+- `DD_VERSION`: Application version
+- `DD_AGENT_HOST`: Datadog Agent host (default: `localhost`)
+- `DD_TRACE_AGENT_PORT`: Datadog Agent APM port (default: `8126`)
 
 #### Running with Datadog Agent
 
@@ -108,7 +96,7 @@ docker run -d --name datadog-agent \
 
 For Docker Compose deployments, uncomment the `datadog-agent` service in `docker-compose.yml`.
 
-If no `datadog_config` section is provided, Datadog tracing will not be initialized.
+If `DD_TRACE_ENABLED` is not set to `true`, Datadog tracing will not be initialized.
 
 ### Support
 

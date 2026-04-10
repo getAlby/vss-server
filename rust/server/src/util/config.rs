@@ -14,6 +14,12 @@ const PSQL_DB_VAR: &str = "VSS_PSQL_DEFAULT_DB";
 const PSQL_VSS_DB_VAR: &str = "VSS_PSQL_VSS_DB";
 const PSQL_TLS_VAR: &str = "VSS_PSQL_TLS";
 const PSQL_CERT_PEM_VAR: &str = "VSS_PSQL_CRT_PEM";
+const DD_TRACE_ENABLED_VAR: &str = "DD_TRACE_ENABLED";
+const DD_SERVICE_VAR: &str = "DD_SERVICE";
+const DD_ENV_VAR: &str = "DD_ENV";
+const DD_VERSION_VAR: &str = "DD_VERSION";
+const DD_AGENT_HOST_VAR: &str = "DD_AGENT_HOST";
+const DD_TRACE_AGENT_PORT_VAR: &str = "DD_TRACE_AGENT_PORT";
 
 // The structure of the toml config file. Any settings specified therein can be overriden by the corresponding
 // environment variable.
@@ -24,7 +30,6 @@ struct TomlConfig {
 	jwt_auth_config: Option<JwtAuthConfig>,
 	postgresql_config: Option<PostgreSQLConfig>,
 	sentry_config: Option<SentryConfig>,
-	datadog_config: Option<DatadogConfig>,
 }
 
 #[derive(Deserialize)]
@@ -33,7 +38,6 @@ pub(crate) struct Config {
 	pub(crate) jwt_auth_config: Option<JwtAuthConfig>,
 	pub(crate) postgresql_config: Option<PostgreSQLConfig>,
 	pub(crate) sentry_config: Option<SentryConfig>,
-	pub(crate) datadog_config: Option<DatadogConfig>,
 }
 
 #[derive(Deserialize)]
@@ -68,78 +72,71 @@ impl SentryConfig {
 }
 
 /// Configuration for Datadog APM tracing.
-#[derive(Deserialize, Clone)]
+#[derive(Clone)]
 pub(crate) struct DatadogConfig {
-	/// Whether Datadog tracing is enabled. Defaults to true if config section is present.
-	/// Can be overridden by env var `DD_TRACE_ENABLED`
-	pub(crate) enabled: Option<bool>,
+	/// Whether Datadog tracing is enabled.
+	pub(crate) enabled: bool,
 	/// The service name for traces. Defaults to "vss-server".
-	/// Can be overridden by env var `DD_SERVICE`
-	pub(crate) service: Option<String>,
+	pub(crate) service: String,
 	/// The environment name (e.g., "production", "staging", "development").
-	/// Can be overridden by env var `DD_ENV`
 	pub(crate) env: Option<String>,
 	/// The version of the service.
-	/// Can be overridden by env var `DD_VERSION`
 	pub(crate) version: Option<String>,
 	/// The Datadog Agent host. Defaults to "localhost".
-	/// Can be overridden by env var `DD_AGENT_HOST`
-	pub(crate) agent_host: Option<String>,
+	pub(crate) agent_host: String,
 	/// The Datadog Agent trace port. Defaults to 8126.
-	/// Can be overridden by env var `DD_TRACE_AGENT_PORT`
-	pub(crate) agent_port: Option<u16>,
+	pub(crate) agent_port: u16,
 }
 
 impl DatadogConfig {
+	pub(crate) fn from_env() -> Result<Self, String> {
+		let enabled = read_env(DD_TRACE_ENABLED_VAR)?
+			.map(|s| {
+				s.parse::<bool>().map_err(|e| {
+					format!("Unable to parse the DD_TRACE_ENABLED environment variable: {}", e)
+				})
+			})
+			.transpose()?
+			.unwrap_or(false);
+
+		let service = read_env(DD_SERVICE_VAR)?.unwrap_or_else(|| "vss-server".to_string());
+		let env = read_env(DD_ENV_VAR)?;
+		let version = read_env(DD_VERSION_VAR)?;
+		let agent_host = read_env(DD_AGENT_HOST_VAR)?.unwrap_or_else(|| "localhost".to_string());
+		let agent_port = read_env(DD_TRACE_AGENT_PORT_VAR)?
+			.map(|s| {
+				s.parse::<u16>().map_err(|e| {
+					format!("Unable to parse the DD_TRACE_AGENT_PORT environment variable: {}", e)
+				})
+			})
+			.transpose()?
+			.unwrap_or(8126);
+
+		Ok(Self { enabled, service, env, version, agent_host, agent_port })
+	}
+
 	pub(crate) fn is_enabled(&self) -> bool {
-		std::env::var("DD_TRACE_ENABLED")
-			.ok()
-			.and_then(|s| s.parse().ok())
-			.or(self.enabled)
-			.unwrap_or(true)
+		self.enabled
 	}
 
 	pub(crate) fn get_service(&self) -> String {
-		std::env::var("DD_SERVICE")
-			.ok()
-			.or_else(|| self.service.clone())
-			.unwrap_or_else(|| "vss-server".to_string())
+		self.service.clone()
 	}
 
 	pub(crate) fn get_env(&self) -> Option<String> {
-		std::env::var("DD_ENV").ok().or_else(|| self.env.clone())
+		self.env.clone()
 	}
 
 	pub(crate) fn get_version(&self) -> Option<String> {
-		std::env::var("DD_VERSION").ok().or_else(|| self.version.clone())
+		self.version.clone()
 	}
 
 	pub(crate) fn get_agent_host(&self) -> String {
-		std::env::var("DD_AGENT_HOST")
-			.ok()
-			.or_else(|| self.agent_host.clone())
-			.unwrap_or_else(|| "localhost".to_string())
+		self.agent_host.clone()
 	}
 
 	pub(crate) fn get_agent_port(&self) -> u16 {
-		std::env::var("DD_TRACE_AGENT_PORT")
-			.ok()
-			.and_then(|s| s.parse().ok())
-			.or(self.agent_port)
-			.unwrap_or(8126)
-	}
-}
-
-impl Default for DatadogConfig {
-	fn default() -> Self {
-		Self {
-			enabled: Some(true),
-			service: Some("vss-server".to_string()),
-			env: None,
-			version: None,
-			agent_host: Some("localhost".to_string()),
-			agent_port: Some(8126),
-		}
+		self.agent_port
 	}
 }
 
@@ -181,7 +178,10 @@ pub(crate) struct Configuration {
 	pub(crate) log_file: PathBuf,
 	pub(crate) log_level: LevelFilter,
 	pub(crate) sentry_config: Option<SentryConfig>,
-	pub(crate) datadog_config: Option<DatadogConfig>,
+}
+
+pub(crate) fn load_datadog_configuration() -> Result<DatadogConfig, String> {
+	DatadogConfig::from_env()
 }
 
 #[inline]
@@ -204,22 +204,16 @@ fn read_config<'a, T: std::fmt::Display>(
 }
 
 pub(crate) fn load_configuration(config_file_path: Option<&str>) -> Result<Configuration, String> {
-	let TomlConfig {
-		server_config,
-		log_config,
-		jwt_auth_config,
-		postgresql_config,
-		sentry_config,
-		datadog_config,
-	} = match config_file_path {
-		Some(path) => {
-			let config_file = std::fs::read_to_string(path)
-				.map_err(|e| format!("Failed to read configuration file: {}", e))?;
-			toml::from_str(&config_file)
-				.map_err(|e| format!("Failed to parse configuration file: {}", e))?
-		},
-		None => TomlConfig::default(), // All fields are set to `None`
-	};
+	let TomlConfig { server_config, log_config, jwt_auth_config, postgresql_config, sentry_config } =
+		match config_file_path {
+			Some(path) => {
+				let config_file = std::fs::read_to_string(path)
+					.map_err(|e| format!("Failed to read configuration file: {}", e))?;
+				toml::from_str(&config_file)
+					.map_err(|e| format!("Failed to parse configuration file: {}", e))?
+			},
+			None => TomlConfig::default(), // All fields are set to `None`
+		};
 
 	let (bind_address_config, max_request_body_size_config) = match server_config {
 		Some(c) => (c.bind_address, c.max_request_body_size),
@@ -332,6 +326,5 @@ pub(crate) fn load_configuration(config_file_path: Option<&str>) -> Result<Confi
 		vss_db,
 		tls_config,
 		sentry_config,
-		datadog_config,
 	})
 }

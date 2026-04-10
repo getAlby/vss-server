@@ -59,8 +59,13 @@ fn main() {
 	// for spawned threads. The guard must be kept alive for the duration of the program.
 	let _sentry_guard = initialize_sentry(&config.sentry_config);
 
+	let datadog_config = util::config::load_datadog_configuration().unwrap_or_else(|e| {
+		eprintln!("Failed to load Datadog configuration from environment: {}", e);
+		std::process::exit(-1);
+	});
+
 	// Initialize Datadog APM tracing
-	initialize_datadog(&config.datadog_config);
+	initialize_datadog(&datadog_config);
 
 	let logger = ServerLogger::init(config.log_level, &config.log_file).unwrap_or_else(|e| {
 		eprintln!("Failed to initialize logger: {e}");
@@ -254,9 +259,7 @@ fn initialize_sentry(
 /// This sets up the tracing subscriber with Datadog's tracing layer to send
 /// traces to the Datadog Agent. The layer is responsible for collecting spans
 /// and sending them to the Datadog Agent.
-fn initialize_datadog(datadog_config: &Option<util::config::DatadogConfig>) {
-	let config = datadog_config.clone().unwrap_or_default();
-
+fn initialize_datadog(config: &util::config::DatadogConfig) {
 	if !config.is_enabled() {
 		println!("Datadog tracing is disabled");
 		// Initialize a basic subscriber without Datadog layer
