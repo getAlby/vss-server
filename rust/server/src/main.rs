@@ -31,12 +31,13 @@ use impls::postgres_store::{PostgresPlaintextBackend, PostgresTlsBackend};
 use util::logger::ServerLogger;
 use vss_service::{VssService, VssServiceConfig};
 
+use tracing_subscriber::layer::SubscriberExt;
+
 mod util;
 mod vss_service;
 
 fn main() {
 	let args: Vec<String> = std::env::args().collect();
-
 	let config =
 		util::config::load_configuration(args.get(1).map(|s| s.as_str())).unwrap_or_else(|e| {
 			eprintln!("Failed to load configuration: {}", e);
@@ -53,13 +54,26 @@ fn main() {
 		None => VssServiceConfig::default(),
 	};
 
-	let logger = match ServerLogger::init(config.log_level, &config.log_file) {
-		Ok(logger) => logger,
-		Err(e) => {
-			eprintln!("Failed to initialize logger: {e}");
-			std::process::exit(-1);
-		},
-	};
+	// Initialize Sentry before the tokio runtime to ensure proper Hub inheritance
+	// for spawned threads. The guard must be kept alive for the duration of the program.
+	let sentry_config = util::config::load_sentry_configuration().unwrap_or_else(|e| {
+		eprintln!("Failed to load Sentry configuration from environment: {}", e);
+		std::process::exit(-1);
+	});
+	let _sentry_guard = initialize_sentry(&sentry_config);
+
+	let datadog_config = util::config::load_datadog_configuration().unwrap_or_else(|e| {
+		eprintln!("Failed to load Datadog configuration from environment: {}", e);
+		std::process::exit(-1);
+	});
+
+	// Initialize Datadog APM tracing
+	initialize_datadog(&datadog_config);
+
+	let logger = ServerLogger::init(config.log_level, &config.log_file).unwrap_or_else(|e| {
+		eprintln!("Failed to initialize logger: {e}");
+		std::process::exit(-1);
+	});
 
 	let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
 		Ok(runtime) => Arc::new(runtime),
@@ -90,8 +104,8 @@ fn main() {
 		let mut authorizer: Option<Arc<dyn Authorizer>> = None;
 		#[cfg(feature = "jwt")]
 		{
-			if let Some(rsa_pem) = config.rsa_pem {
-				authorizer = match JWTAuthorizer::new(&rsa_pem).await {
+			if let Some(rsa_pem) = config.rsa_pem.as_deref() {
+				authorizer = match JWTAuthorizer::new(rsa_pem).await {
 					Ok(auth) => {
 						info!("Configured JWT authorizer with RSA public key");
 						Some(Arc::new(auth))
@@ -125,7 +139,7 @@ fn main() {
 			std::process::exit(-1);
 		});
 
-		let store: Arc<dyn KvStore> = if let Some(crt_pem) = config.tls_config {
+		let store: Arc<dyn KvStore> = if let Some(crt_pem) = config.tls_config.as_ref() {
 			let postgres_tls_backend = PostgresTlsBackend::new(
 				&config.postgresql_prefix,
 				&config.default_db,
@@ -161,7 +175,7 @@ fn main() {
 		};
 
 		let rest_svc_listener = TcpListener::bind(&config.bind_address).await.unwrap_or_else(|e| {
-			error!("Failed to bind to address {}: {}", config.bind_address, e);
+			error!("Failed to bind listening port: {}", e);
 			std::process::exit(-1);
 		});
 		info!("Listening for incoming connections on {}{}", config.bind_address, crate::vss_service::BASE_PATH_PREFIX);
@@ -172,7 +186,8 @@ fn main() {
 					match res {
 						Ok((stream, _)) => {
 							let io_stream = TokioIo::new(stream);
-							let vss_service = VssService::new(Arc::clone(&store), Arc::clone(&authorizer), vss_service_config);
+							let vss_service =
+								VssService::new(Arc::clone(&store), Arc::clone(&authorizer), vss_service_config);
 							runtime.spawn(async move {
 								if let Err(err) = http1::Builder::new().serve_connection(io_stream, vss_service).await {
 									warn!("Failed to serve connection: {}", err);
@@ -198,4 +213,98 @@ fn main() {
 			}
 		}
 	});
+}
+
+/// Initializes Sentry error tracking if configured.
+///
+/// Sentry must be initialized before the tokio runtime starts to ensure proper
+/// Hub inheritance for spawned threads. Returns a guard that must be kept alive
+/// for the duration of the program to ensure events are flushed on shutdown.
+fn initialize_sentry(sentry_config: &util::config::SentryConfig) -> Option<sentry::ClientInitGuard> {
+	let dsn = match sentry_config.get_dsn() {
+		Some(dsn) if !dsn.is_empty() => dsn,
+		_ => return None,
+	};
+
+	let environment = sentry_config.get_environment();
+	let sample_rate = sentry_config.get_sample_rate();
+
+	let guard = sentry::init((
+		dsn,
+		sentry::ClientOptions {
+			release: sentry::release_name!(),
+			environment: environment.map(std::borrow::Cow::Owned),
+			sample_rate,
+			..Default::default()
+		},
+	));
+
+	if guard.is_enabled() {
+		println!(
+			"Sentry initialized (environment: {}, sample_rate: {})",
+			sentry_config.get_environment().unwrap_or_else(|| "default".to_string()),
+			sample_rate
+		);
+	}
+
+	Some(guard)
+}
+
+/// Initializes Datadog APM tracing if configured.
+///
+/// This sets up the tracing subscriber with Datadog's tracing layer to send
+/// traces to the Datadog Agent. The layer is responsible for collecting spans
+/// and sending them to the Datadog Agent.
+fn initialize_datadog(config: &util::config::DatadogConfig) {
+	if !config.is_enabled() {
+		println!("Datadog tracing is disabled");
+		if let Err(e) = tracing::subscriber::set_global_default(tracing_subscriber::registry()) {
+			eprintln!("Failed to initialize tracing subscriber: {}", e);
+		}
+		return;
+	}
+
+	let service = config.get_service();
+	let agent_host = config.get_agent_host();
+	let agent_port = config.get_agent_port();
+	let agent_address = format!("{}:{}", agent_host, agent_port);
+	let env = config.get_env();
+	let version = config.get_version();
+
+	// Build the Datadog tracing layer
+	let mut builder = tracing_datadog::DatadogTraceLayer::builder()
+		.service(&service)
+		.agent_address(&agent_address);
+
+	if let Some(ref env_str) = env {
+		builder = builder.env(env_str);
+	}
+
+	if let Some(ref version_str) = version {
+		builder = builder.version(version_str);
+	}
+
+	let layer = match builder.build() {
+		Ok(layer) => layer,
+		Err(e) => {
+			eprintln!("Failed to initialize Datadog tracing: {}", e);
+			if let Err(e) = tracing::subscriber::set_global_default(tracing_subscriber::registry()) {
+				eprintln!("Failed to initialize tracing subscriber: {}", e);
+			}
+			return;
+		},
+	};
+
+	// Initialize the tracing subscriber with the Datadog layer
+	if let Err(e) = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer)) {
+		eprintln!("Failed to initialize tracing subscriber with Datadog layer: {}", e);
+	}
+
+	println!(
+		"Datadog APM tracing initialized (service: {}, agent: {}, env: {}, version: {})",
+		service,
+		agent_address,
+		env.unwrap_or_else(|| "not set".to_string()),
+		version.unwrap_or_else(|| "not set".to_string())
+	);
 }

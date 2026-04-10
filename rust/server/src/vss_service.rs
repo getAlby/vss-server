@@ -5,6 +5,7 @@ use hyper::{Request, Response, StatusCode};
 use std::collections::HashMap;
 
 use prost::Message;
+use tracing::{instrument, Instrument, Span};
 
 use api::auth::Authorizer;
 use api::error::VssError;
@@ -74,64 +75,103 @@ impl Service<Request<Incoming>> for VssService {
 		let store = Arc::clone(&self.store);
 		let authorizer = Arc::clone(&self.authorizer);
 		let path = req.uri().path().to_owned();
+		let method = req.method().to_string();
 		let maximum_request_body_size = self.config.maximum_request_body_size;
 
-		Box::pin(async move {
-			let prefix_stripped_path = path.strip_prefix(BASE_PATH_PREFIX).unwrap_or_default();
+		let prefix_stripped_path = path.strip_prefix(BASE_PATH_PREFIX).unwrap_or_default().to_owned();
 
-			match prefix_stripped_path {
-				"/getObject" => {
-					handle_request(
-						store,
-						authorizer,
-						req,
-						maximum_request_body_size,
-						handle_get_object_request,
-					)
-					.await
-				},
-				"/putObjects" => {
-					handle_request(
-						store,
-						authorizer,
-						req,
-						maximum_request_body_size,
-						handle_put_object_request,
-					)
-					.await
-				},
-				"/deleteObject" => {
-					handle_request(
-						store,
-						authorizer,
-						req,
-						maximum_request_body_size,
-						handle_delete_object_request,
-					)
-					.await
-				},
-				"/listKeyVersions" => {
-					handle_request(
-						store,
-						authorizer,
-						req,
-						maximum_request_body_size,
-						handle_list_object_request,
-					)
-					.await
-				},
-				_ => {
-					let error_msg = "Invalid request path.".as_bytes();
-					Ok(Response::builder()
-						.status(StatusCode::BAD_REQUEST)
-						.body(Full::new(Bytes::from(error_msg)))
-						.unwrap())
-				},
+		// Create a root span for the HTTP request
+		let span = tracing::info_span!(
+			"http.request",
+			http.method = %method,
+			http.url = %path,
+			http.route = %prefix_stripped_path,
+			span.type = "web",
+			resource.name = %format!("{} {}", method, prefix_stripped_path),
+		);
+
+		// Use .instrument(span) instead of span.enter() for async code.
+		// span.enter() is not safe across .await points as the future may
+		// resume on a different thread, causing span lifecycle issues.
+		Box::pin(
+			async move {
+				match prefix_stripped_path.as_str() {
+					"/getObject" => {
+						handle_request(
+							store,
+							authorizer,
+							req,
+							maximum_request_body_size,
+							"getObject",
+							handle_get_object_request,
+						)
+							.await
+					},
+					"/putObjects" => {
+						handle_request(
+							store,
+							authorizer,
+							req,
+							maximum_request_body_size,
+							"putObjects",
+							handle_put_object_request,
+						)
+							.await
+					},
+					"/deleteObject" => {
+						handle_request(
+							store,
+							authorizer,
+							req,
+							maximum_request_body_size,
+							"deleteObject",
+							handle_delete_object_request,
+						)
+						.await
+					},
+					"/listKeyVersions" => {
+						handle_request(
+							store,
+							authorizer,
+							req,
+							maximum_request_body_size,
+							"listKeyVersions",
+							handle_list_object_request,
+						)
+						.await
+					},
+					"/testSentry" => {
+						// Test endpoint to verify Sentry integration
+						handle_test_sentry_request().await
+					},
+					_ => {
+						sentry::capture_message(
+							&format!("Invalid request path: {}", prefix_stripped_path),
+							sentry::Level::Warning,
+						);
+						tracing::warn!(http.status_code = 400, "Invalid request path: {}", prefix_stripped_path);
+						let error_msg = "Invalid request path.".as_bytes();
+						Ok(Response::builder()
+							.status(StatusCode::BAD_REQUEST)
+							.body(Full::new(Bytes::from(error_msg)))
+							.unwrap())
+					},
+				}
 			}
-		})
+			.instrument(span),
+		)
 	}
 }
 
+#[instrument(
+	name = "vss.get_object",
+	skip(store, user_token, request),
+	fields(
+		store_id = %request.store_id,
+		key = %request.key,
+		span.type = "vss"
+	)
+)]
 async fn handle_get_object_request(
 	store: Arc<dyn KvStore>, user_token: String, request: GetObjectRequest,
 ) -> Result<GetObjectResponse, VssError> {
@@ -143,6 +183,17 @@ async fn handle_get_object_request(
 	}
 	result
 }
+
+#[instrument(
+	name = "vss.put_objects",
+	skip(store, user_token, request),
+	fields(
+		store_id = %request.store_id,
+		transaction_items_count = %request.transaction_items.len(),
+		delete_items_count = %request.delete_items.len(),
+		span.type = "vss"
+	)
+)]
 async fn handle_put_object_request(
 	store: Arc<dyn KvStore>, user_token: String, request: PutObjectRequest,
 ) -> Result<PutObjectResponse, VssError> {
@@ -159,6 +210,15 @@ async fn handle_put_object_request(
 	}
 	result
 }
+
+#[instrument(
+	name = "vss.delete_object",
+	skip(store, user_token, request),
+	fields(
+		store_id = %request.store_id,
+		span.type = "vss"
+	)
+)]
 async fn handle_delete_object_request(
 	store: Arc<dyn KvStore>, user_token: String, request: DeleteObjectRequest,
 ) -> Result<DeleteObjectResponse, VssError> {
@@ -174,6 +234,16 @@ async fn handle_delete_object_request(
 	}
 	result
 }
+
+#[instrument(
+	name = "vss.list_key_versions",
+	skip(store, user_token, request),
+	fields(
+		store_id = %request.store_id,
+		key_prefix = ?request.key_prefix,
+		span.type = "vss"
+	)
+)]
 async fn handle_list_object_request(
 	store: Arc<dyn KvStore>, user_token: String, request: ListKeyVersionsRequest,
 ) -> Result<ListKeyVersionsResponse, VssError> {
@@ -191,6 +261,25 @@ async fn handle_list_object_request(
 	}
 	result
 }
+
+/// Test endpoint to verify Sentry integration is working.
+/// Sends a test error event to Sentry and returns a confirmation message.
+async fn handle_test_sentry_request(
+) -> Result<<VssService as Service<Request<Incoming>>>::Response, hyper::Error> {
+	// Create a test error and capture it
+	let test_error =
+		std::io::Error::new(std::io::ErrorKind::Other, "Test error from /vss/testSentry endpoint");
+	sentry::capture_error(&test_error);
+
+	// Also send a test message
+	sentry::capture_message("Test message from /vss/testSentry endpoint", sentry::Level::Warning);
+
+	let response_body = b"Sentry test events sent. Check your Sentry dashboard.";
+	Ok(Response::builder()
+		.status(StatusCode::OK)
+		.body(Full::new(Bytes::from(response_body.to_vec())))
+		.unwrap())
+}
 async fn handle_request<
 	T: Message + Default,
 	R: Message,
@@ -198,7 +287,7 @@ async fn handle_request<
 	Fut: Future<Output = Result<R, VssError>> + Send,
 >(
 	store: Arc<dyn KvStore>, authorizer: Arc<dyn Authorizer>, request: Request<Incoming>,
-	maximum_request_body_size: usize, handler: F,
+	maximum_request_body_size: usize, operation_name: &str, handler: F,
 ) -> Result<<VssService as Service<Request<Incoming>>>::Response, hyper::Error> {
 	let (parts, body) = request.into_parts();
 	let headers_map = parts
@@ -209,15 +298,34 @@ async fn handle_request<
 		.collect::<HashMap<String, String>>();
 	debug_assert!(headers_map.keys().all(|key| key.chars().all(|c| !c.is_uppercase())));
 
-	let user_token = match authorizer.verify(&headers_map).await {
-		Ok(auth_response) => auth_response.user_token,
-		Err(e) => return Ok(build_error_response(e)),
+	// Create a span for authentication and use .instrument() for async-safety
+	let auth_span = tracing::info_span!("auth.verify", span.type = "auth");
+	let user_token = match authorizer
+		.verify(&headers_map)
+		.instrument(auth_span)
+		.await
+	{
+		Ok(auth_response) => {
+			tracing::info!("Authentication successful");
+			auth_response.user_token
+		},
+		Err(e) => {
+			sentry::capture_message(
+				&format!("Authentication failure: {}", e),
+				sentry::Level::Warning,
+			);
+			tracing::warn!(error = %e, "Authentication failure");
+			return Ok(build_error_response(e));
+		},
 	};
 
 	let limited_body = Limited::new(body, maximum_request_body_size);
 	let bytes = match limited_body.collect().await {
 		Ok(body) => body.to_bytes(),
 		Err(_) => {
+			Span::current().record("http.status_code", 413);
+			Span::current().record("error", true);
+			tracing::warn!(http.status_code = 413, "Request body too large");
 			return Ok(Response::builder()
 				.status(StatusCode::PAYLOAD_TOO_LARGE)
 				.body(Full::new(Bytes::from("Request body too large")))
@@ -225,19 +333,80 @@ async fn handle_request<
 				.unwrap());
 		},
 	};
+
+	// Record request body size
+	Span::current().record("http.request.body.size", bytes.len());
+
 	match T::decode(bytes) {
 		Ok(request) => match handler(store.clone(), user_token, request).await {
-			Ok(response) => Ok(Response::builder()
-				.body(Full::new(Bytes::from(response.encode_to_vec())))
-				// unwrap safety: body only errors when previous chained calls failed.
-				.unwrap()),
-			Err(e) => Ok(build_error_response(e)),
+			Ok(response) => {
+				let response_bytes = response.encode_to_vec();
+				Span::current().record("http.response.body.size", response_bytes.len());
+				Span::current().record("http.status_code", 200);
+				tracing::info!(
+					http.status_code = 200,
+					operation = operation_name,
+					"Request completed successfully"
+				);
+				Ok(Response::builder()
+					.body(Full::new(Bytes::from(response_bytes)))
+					// unwrap safety: body only errors when previous chained calls failed.
+					.unwrap())
+			},
+			Err(e) => {
+				let status_code = get_error_status_code(&e);
+				Span::current().record("http.status_code", status_code);
+				Span::current().record("error", true);
+
+				match &e {
+					VssError::InternalServerError(msg) => {
+						sentry::capture_message(
+							&format!("Internal server error: {}", msg),
+							sentry::Level::Error,
+						);
+						tracing::error!(error = %e, http.status_code = status_code, "Internal server error");
+					},
+					VssError::NoSuchKeyError(_) => {
+						// NoSuchKeyError is a normal case when a key doesn't exist (404).
+						// Don't send these to Sentry as they're expected errors.
+						tracing::info!(error = %e, http.status_code = status_code, "Key not found");
+					},
+					_ => {
+						sentry::capture_message(
+							&format!("Request error: {}", e),
+							sentry::Level::Warning,
+						);
+						tracing::warn!(error = %e, http.status_code = status_code, "Request error");
+					},
+				}
+				Ok(build_error_response(e))
+			},
 		},
-		Err(_) => Ok(Response::builder()
-			.status(StatusCode::BAD_REQUEST)
-			.body(Full::new(Bytes::from(b"Error parsing request".to_vec())))
-			// unwrap safety: body only errors when previous chained calls failed.
-			.unwrap()),
+		Err(e) => {
+			sentry::capture_message(
+				&format!("Error parsing protobuf request: {}", e),
+				sentry::Level::Warning,
+			);
+			Span::current().record("http.status_code", 400);
+			Span::current().record("error", true);
+			tracing::warn!(error = %e, http.status_code = 400, "Error parsing protobuf request");
+			Ok(Response::builder()
+				.status(StatusCode::BAD_REQUEST)
+				.body(Full::new(Bytes::from(b"Error parsing request".to_vec())))
+				// unwrap safety: body only errors when previous chained calls failed.
+				.unwrap())
+		},
+	}
+}
+
+/// Returns the HTTP status code for a given VssError
+fn get_error_status_code(e: &VssError) -> u16 {
+	match e {
+		VssError::NoSuchKeyError(_) => 404,
+		VssError::ConflictError(_) => 409,
+		VssError::InvalidRequestError(_) => 400,
+		VssError::AuthError(_) => 401,
+		VssError::InternalServerError(_) => 500,
 	}
 }
 

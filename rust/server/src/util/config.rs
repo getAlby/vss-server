@@ -14,6 +14,15 @@ const PSQL_DB_VAR: &str = "VSS_PSQL_DEFAULT_DB";
 const PSQL_VSS_DB_VAR: &str = "VSS_PSQL_VSS_DB";
 const PSQL_TLS_VAR: &str = "VSS_PSQL_TLS";
 const PSQL_CERT_PEM_VAR: &str = "VSS_PSQL_CRT_PEM";
+const SENTRY_DSN_VAR: &str = "SENTRY_DSN";
+const SENTRY_ENVIRONMENT_VAR: &str = "SENTRY_ENVIRONMENT";
+const SENTRY_SAMPLE_RATE_VAR: &str = "SENTRY_SAMPLE_RATE";
+const DD_TRACE_ENABLED_VAR: &str = "DD_TRACE_ENABLED";
+const DD_SERVICE_VAR: &str = "DD_SERVICE";
+const DD_ENV_VAR: &str = "DD_ENV";
+const DD_VERSION_VAR: &str = "DD_VERSION";
+const DD_AGENT_HOST_VAR: &str = "DD_AGENT_HOST";
+const DD_TRACE_AGENT_PORT_VAR: &str = "DD_TRACE_AGENT_PORT";
 
 // The structure of the toml config file. Any settings specified therein can be overriden by the corresponding
 // environment variable.
@@ -26,9 +35,121 @@ struct TomlConfig {
 }
 
 #[derive(Deserialize)]
+pub(crate) struct Config {
+	pub(crate) server_config: ServerConfig,
+	pub(crate) jwt_auth_config: Option<JwtAuthConfig>,
+	pub(crate) postgresql_config: Option<PostgreSQLConfig>,
+}
+
+#[derive(Deserialize)]
 struct ServerConfig {
 	bind_address: Option<String>,
 	max_request_body_size: Option<usize>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SentryConfig {
+	pub(crate) dsn: Option<String>,
+	pub(crate) environment: Option<String>,
+	pub(crate) sample_rate: f32,
+}
+
+impl SentryConfig {
+	pub(crate) fn from_env() -> Result<Self, String> {
+		let dsn = read_env(SENTRY_DSN_VAR)?;
+		let environment = read_env(SENTRY_ENVIRONMENT_VAR)?;
+		let sample_rate = read_env(SENTRY_SAMPLE_RATE_VAR)?
+			.map(|s| {
+				s.parse::<f32>().map_err(|e| {
+					format!("Unable to parse the SENTRY_SAMPLE_RATE environment variable: {}", e)
+				})
+			})
+			.transpose()?
+			.unwrap_or(1.0);
+
+		Ok(Self { dsn, environment, sample_rate })
+	}
+
+	pub(crate) fn get_dsn(&self) -> Option<String> {
+		self.dsn.clone()
+	}
+
+	pub(crate) fn get_environment(&self) -> Option<String> {
+		self.environment.clone()
+	}
+
+	pub(crate) fn get_sample_rate(&self) -> f32 {
+		self.sample_rate
+	}
+}
+
+/// Configuration for Datadog APM tracing.
+#[derive(Clone)]
+pub(crate) struct DatadogConfig {
+	/// Whether Datadog tracing is enabled.
+	pub(crate) enabled: bool,
+	/// The service name for traces. Defaults to "vss-server".
+	pub(crate) service: String,
+	/// The environment name (e.g., "production", "staging", "development").
+	pub(crate) env: Option<String>,
+	/// The version of the service.
+	pub(crate) version: Option<String>,
+	/// The Datadog Agent host. Defaults to "localhost".
+	pub(crate) agent_host: String,
+	/// The Datadog Agent trace port. Defaults to 8126.
+	pub(crate) agent_port: u16,
+}
+
+impl DatadogConfig {
+	pub(crate) fn from_env() -> Result<Self, String> {
+		let enabled = read_env(DD_TRACE_ENABLED_VAR)?
+			.map(|s| {
+				s.parse::<bool>().map_err(|e| {
+					format!("Unable to parse the DD_TRACE_ENABLED environment variable: {}", e)
+				})
+			})
+			.transpose()?
+			.unwrap_or(false);
+
+		let service = read_env(DD_SERVICE_VAR)?.unwrap_or_else(|| "vss-server".to_string());
+		let env = read_env(DD_ENV_VAR)?;
+		let version = read_env(DD_VERSION_VAR)?;
+		let agent_host = read_env(DD_AGENT_HOST_VAR)?.unwrap_or_else(|| "localhost".to_string());
+		let agent_port = read_env(DD_TRACE_AGENT_PORT_VAR)?
+			.map(|s| {
+				s.parse::<u16>().map_err(|e| {
+					format!("Unable to parse the DD_TRACE_AGENT_PORT environment variable: {}", e)
+				})
+			})
+			.transpose()?
+			.unwrap_or(8126);
+
+		Ok(Self { enabled, service, env, version, agent_host, agent_port })
+	}
+
+	pub(crate) fn is_enabled(&self) -> bool {
+		self.enabled
+	}
+
+	pub(crate) fn get_service(&self) -> String {
+		self.service.clone()
+	}
+
+	pub(crate) fn get_env(&self) -> Option<String> {
+		self.env.clone()
+	}
+
+	pub(crate) fn get_version(&self) -> Option<String> {
+		self.version.clone()
+	}
+
+	pub(crate) fn get_agent_host(&self) -> String {
+		self.agent_host.clone()
+	}
+
+	pub(crate) fn get_agent_port(&self) -> u16 {
+		self.agent_port
+	}
 }
 
 #[derive(Deserialize)]
@@ -68,6 +189,14 @@ pub(crate) struct Configuration {
 	pub(crate) tls_config: Option<Option<String>>,
 	pub(crate) log_file: PathBuf,
 	pub(crate) log_level: LevelFilter,
+}
+
+pub(crate) fn load_datadog_configuration() -> Result<DatadogConfig, String> {
+	DatadogConfig::from_env()
+}
+
+pub(crate) fn load_sentry_configuration() -> Result<SentryConfig, String> {
+	SentryConfig::from_env()
 }
 
 #[inline]

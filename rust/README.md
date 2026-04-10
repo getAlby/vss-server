@@ -32,6 +32,63 @@ cargo build --release
 
 Refer to `./server/vss-server-config.toml` to see available configuration options.
 
+### Sentry Integration (Optional)
+
+VSS supports [Sentry](https://sentry.io) for error tracking and monitoring. To enable Sentry:
+
+Sentry is configured via environment variables only:
+
+- `SENTRY_DSN`: Your Sentry DSN
+- `SENTRY_ENVIRONMENT`: Environment name (for example, `production`)
+- `SENTRY_SAMPLE_RATE`: Sample rate for error events (0.0 to 1.0, default: 1.0)
+
+If `SENTRY_DSN` is not set, Sentry will not be initialized.
+
+### Datadog APM Tracing (Optional)
+
+VSS supports [Datadog APM](https://docs.datadoghq.com/tracing/) for distributed tracing and performance monitoring. The implementation uses the [`dd-trace-rs`](https://github.com/DataDog/dd-trace-rs) library.
+
+#### Features
+
+The Datadog integration provides:
+- **HTTP Request Tracing**: Automatic spans for all API endpoints (`/getObject`, `/putObjects`, `/deleteObject`, `/listKeyVersions`)
+- **Database Operation Tracing**: Spans for PostgreSQL operations with query details
+- **Authentication Tracing**: Spans for JWT verification
+- **Error Tracking**: Automatic error tagging on spans
+
+#### Configuration
+
+Datadog tracing is configured via environment variables only:
+
+- `DD_TRACE_ENABLED`: Enable/disable tracing ("true" or "false", default: false)
+- `DD_SERVICE`: Service name (default: `vss-server`)
+- `DD_ENV`: Environment name
+- `DD_VERSION`: Application version
+- `DD_AGENT_HOST`: Datadog Agent host (default: `localhost`)
+- `DD_TRACE_AGENT_PORT`: Datadog Agent APM port (default: `8126`)
+
+#### Running with Datadog Agent
+
+To collect traces, you need to run the Datadog Agent. The easiest way is using Docker:
+
+```bash
+# Set your Datadog API key
+export DD_API_KEY=your_api_key_here
+
+# Run the Datadog Agent
+docker run -d --name datadog-agent \
+  -e DD_API_KEY=$DD_API_KEY \
+  -e DD_SITE=datadoghq.com \
+  -e DD_APM_ENABLED=true \
+  -e DD_APM_NON_LOCAL_TRAFFIC=true \
+  -p 8126:8126 \
+  gcr.io/datadoghq/agent:7
+```
+
+For Docker Compose deployments, uncomment the `datadog-agent` service in `docker-compose.yml`.
+
+If `DD_TRACE_ENABLED` is not set to `true`, Datadog tracing will not be initialized.
+
 ### Support
 
 If you encounter any issues or have questions, feel free to open an issue on
