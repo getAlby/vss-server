@@ -23,6 +23,8 @@ struct TomlConfig {
 	log_config: Option<LogConfig>,
 	jwt_auth_config: Option<JwtAuthConfig>,
 	postgresql_config: Option<PostgreSQLConfig>,
+	sentry_config: Option<SentryConfig>,
+	datadog_config: Option<DatadogConfig>,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +178,8 @@ pub(crate) struct Configuration {
 	pub(crate) tls_config: Option<Option<String>>,
 	pub(crate) log_file: PathBuf,
 	pub(crate) log_level: LevelFilter,
+	pub(crate) sentry_config: Option<SentryConfig>,
+	pub(crate) datadog_config: Option<DatadogConfig>,
 }
 
 #[inline]
@@ -198,16 +202,22 @@ fn read_config<'a, T: std::fmt::Display>(
 }
 
 pub(crate) fn load_configuration(config_file_path: Option<&str>) -> Result<Configuration, String> {
-	let TomlConfig { server_config, log_config, jwt_auth_config, postgresql_config } =
-		match config_file_path {
-			Some(path) => {
-				let config_file = std::fs::read_to_string(path)
-					.map_err(|e| format!("Failed to read configuration file: {}", e))?;
-				toml::from_str(&config_file)
-					.map_err(|e| format!("Failed to parse configuration file: {}", e))?
-			},
-			None => TomlConfig::default(), // All fields are set to `None`
-		};
+	let TomlConfig {
+		server_config,
+		log_config,
+		jwt_auth_config,
+		postgresql_config,
+		sentry_config,
+		datadog_config,
+	} = match config_file_path {
+		Some(path) => {
+			let config_file = std::fs::read_to_string(path)
+				.map_err(|e| format!("Failed to read configuration file: {}", e))?;
+			toml::from_str(&config_file)
+				.map_err(|e| format!("Failed to parse configuration file: {}", e))?
+		},
+		None => TomlConfig::default(), // All fields are set to `None`
+	};
 
 	let bind_address_env = read_env(BIND_ADDR_VAR)?
 		.map(|addr| {
@@ -316,5 +326,7 @@ pub(crate) fn load_configuration(config_file_path: Option<&str>) -> Result<Confi
 		default_db,
 		vss_db,
 		tls_config,
+		sentry_config,
+		datadog_config,
 	})
 }
