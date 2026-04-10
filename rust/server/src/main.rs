@@ -56,7 +56,11 @@ fn main() {
 
 	// Initialize Sentry before the tokio runtime to ensure proper Hub inheritance
 	// for spawned threads. The guard must be kept alive for the duration of the program.
-	let _sentry_guard = initialize_sentry(&config.sentry_config);
+	let sentry_config = util::config::load_sentry_configuration().unwrap_or_else(|e| {
+		eprintln!("Failed to load Sentry configuration from environment: {}", e);
+		std::process::exit(-1);
+	});
+	let _sentry_guard = initialize_sentry(&sentry_config);
 
 	let datadog_config = util::config::load_datadog_configuration().unwrap_or_else(|e| {
 		eprintln!("Failed to load Datadog configuration from environment: {}", e);
@@ -216,21 +220,14 @@ fn main() {
 /// Sentry must be initialized before the tokio runtime starts to ensure proper
 /// Hub inheritance for spawned threads. Returns a guard that must be kept alive
 /// for the duration of the program to ensure events are flushed on shutdown.
-fn initialize_sentry(
-	sentry_config: &Option<util::config::SentryConfig>,
-) -> Option<sentry::ClientInitGuard> {
-	let config = match sentry_config {
-		Some(cfg) => cfg,
-		None => return None,
-	};
-
-	let dsn = match config.get_dsn() {
+fn initialize_sentry(sentry_config: &util::config::SentryConfig) -> Option<sentry::ClientInitGuard> {
+	let dsn = match sentry_config.get_dsn() {
 		Some(dsn) if !dsn.is_empty() => dsn,
 		_ => return None,
 	};
 
-	let environment = config.get_environment();
-	let sample_rate = config.get_sample_rate();
+	let environment = sentry_config.get_environment();
+	let sample_rate = sentry_config.get_sample_rate();
 
 	let guard = sentry::init((
 		dsn,
@@ -245,7 +242,7 @@ fn initialize_sentry(
 	if guard.is_enabled() {
 		println!(
 			"Sentry initialized (environment: {}, sample_rate: {})",
-			config.get_environment().unwrap_or_else(|| "default".to_string()),
+			sentry_config.get_environment().unwrap_or_else(|| "default".to_string()),
 			sample_rate
 		);
 	}

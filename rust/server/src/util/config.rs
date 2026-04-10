@@ -14,6 +14,9 @@ const PSQL_DB_VAR: &str = "VSS_PSQL_DEFAULT_DB";
 const PSQL_VSS_DB_VAR: &str = "VSS_PSQL_VSS_DB";
 const PSQL_TLS_VAR: &str = "VSS_PSQL_TLS";
 const PSQL_CERT_PEM_VAR: &str = "VSS_PSQL_CRT_PEM";
+const SENTRY_DSN_VAR: &str = "SENTRY_DSN";
+const SENTRY_ENVIRONMENT_VAR: &str = "SENTRY_ENVIRONMENT";
+const SENTRY_SAMPLE_RATE_VAR: &str = "SENTRY_SAMPLE_RATE";
 const DD_TRACE_ENABLED_VAR: &str = "DD_TRACE_ENABLED";
 const DD_SERVICE_VAR: &str = "DD_SERVICE";
 const DD_ENV_VAR: &str = "DD_ENV";
@@ -29,7 +32,6 @@ struct TomlConfig {
 	log_config: Option<LogConfig>,
 	jwt_auth_config: Option<JwtAuthConfig>,
 	postgresql_config: Option<PostgreSQLConfig>,
-	sentry_config: Option<SentryConfig>,
 }
 
 #[derive(Deserialize)]
@@ -37,7 +39,6 @@ pub(crate) struct Config {
 	pub(crate) server_config: ServerConfig,
 	pub(crate) jwt_auth_config: Option<JwtAuthConfig>,
 	pub(crate) postgresql_config: Option<PostgreSQLConfig>,
-	pub(crate) sentry_config: Option<SentryConfig>,
 }
 
 #[derive(Deserialize)]
@@ -46,28 +47,39 @@ struct ServerConfig {
 	max_request_body_size: Option<usize>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Clone)]
 pub(crate) struct SentryConfig {
-	pub(crate) dsn: Option<String>, // Optional in TOML, can be overridden by env var `SENTRY_DSN`
-	pub(crate) environment: Option<String>, // e.g., "production", "staging", "development"
-	pub(crate) sample_rate: Option<f32>, // Value between 0.0 and 1.0, defaults to 1.0
+	pub(crate) dsn: Option<String>,
+	pub(crate) environment: Option<String>,
+	pub(crate) sample_rate: f32,
 }
 
 impl SentryConfig {
+	pub(crate) fn from_env() -> Result<Self, String> {
+		let dsn = read_env(SENTRY_DSN_VAR)?;
+		let environment = read_env(SENTRY_ENVIRONMENT_VAR)?;
+		let sample_rate = read_env(SENTRY_SAMPLE_RATE_VAR)?
+			.map(|s| {
+				s.parse::<f32>().map_err(|e| {
+					format!("Unable to parse the SENTRY_SAMPLE_RATE environment variable: {}", e)
+				})
+			})
+			.transpose()?
+			.unwrap_or(1.0);
+
+		Ok(Self { dsn, environment, sample_rate })
+	}
+
 	pub(crate) fn get_dsn(&self) -> Option<String> {
-		std::env::var("SENTRY_DSN").ok().or_else(|| self.dsn.clone())
+		self.dsn.clone()
 	}
 
 	pub(crate) fn get_environment(&self) -> Option<String> {
-		std::env::var("SENTRY_ENVIRONMENT").ok().or_else(|| self.environment.clone())
+		self.environment.clone()
 	}
 
 	pub(crate) fn get_sample_rate(&self) -> f32 {
-		std::env::var("SENTRY_SAMPLE_RATE")
-			.ok()
-			.and_then(|s| s.parse().ok())
-			.or(self.sample_rate)
-			.unwrap_or(1.0)
+		self.sample_rate
 	}
 }
 
@@ -177,11 +189,14 @@ pub(crate) struct Configuration {
 	pub(crate) tls_config: Option<Option<String>>,
 	pub(crate) log_file: PathBuf,
 	pub(crate) log_level: LevelFilter,
-	pub(crate) sentry_config: Option<SentryConfig>,
 }
 
 pub(crate) fn load_datadog_configuration() -> Result<DatadogConfig, String> {
 	DatadogConfig::from_env()
+}
+
+pub(crate) fn load_sentry_configuration() -> Result<SentryConfig, String> {
+	SentryConfig::from_env()
 }
 
 #[inline]
@@ -204,7 +219,7 @@ fn read_config<'a, T: std::fmt::Display>(
 }
 
 pub(crate) fn load_configuration(config_file_path: Option<&str>) -> Result<Configuration, String> {
-	let TomlConfig { server_config, log_config, jwt_auth_config, postgresql_config, sentry_config } =
+	let TomlConfig { server_config, log_config, jwt_auth_config, postgresql_config } =
 		match config_file_path {
 			Some(path) => {
 				let config_file = std::fs::read_to_string(path)
@@ -325,6 +340,5 @@ pub(crate) fn load_configuration(config_file_path: Option<&str>) -> Result<Confi
 		default_db,
 		vss_db,
 		tls_config,
-		sentry_config,
 	})
 }
