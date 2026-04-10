@@ -1,4 +1,4 @@
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::{Bytes, Incoming};
 use hyper::service::Service;
 use hyper::{Request, Response, StatusCode};
@@ -23,15 +23,44 @@ use log::{debug, trace};
 
 use crate::util::KeyValueVecKeyPrinter;
 
+const MAXIMUM_REQUEST_BODY_SIZE: usize = 1024 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+pub(crate) struct VssServiceConfig {
+	maximum_request_body_size: usize,
+}
+
+impl VssServiceConfig {
+	pub fn new(maximum_request_body_size: usize) -> Result<Self, String> {
+		if maximum_request_body_size > MAXIMUM_REQUEST_BODY_SIZE {
+			return Err(format!(
+				"Maximum request body size {} exceeds maximum {}",
+				maximum_request_body_size, MAXIMUM_REQUEST_BODY_SIZE
+			));
+		}
+
+		Ok(Self { maximum_request_body_size })
+	}
+}
+
+impl Default for VssServiceConfig {
+	fn default() -> Self {
+		Self { maximum_request_body_size: MAXIMUM_REQUEST_BODY_SIZE }
+	}
+}
+
 #[derive(Clone)]
 pub struct VssService {
 	store: Arc<dyn KvStore>,
 	authorizer: Arc<dyn Authorizer>,
+	config: VssServiceConfig,
 }
 
 impl VssService {
-	pub(crate) fn new(store: Arc<dyn KvStore>, authorizer: Arc<dyn Authorizer>) -> Self {
-		Self { store, authorizer }
+	pub(crate) fn new(
+		store: Arc<dyn KvStore>, authorizer: Arc<dyn Authorizer>, config: VssServiceConfig,
+	) -> Self {
+		Self { store, authorizer, config }
 	}
 }
 
@@ -47,6 +76,7 @@ impl Service<Request<Incoming>> for VssService {
 		let authorizer = Arc::clone(&self.authorizer);
 		let path = req.uri().path().to_owned();
 		let method = req.method().to_string();
+		let maximum_request_body_size = self.config.maximum_request_body_size;
 
 		let prefix_stripped_path = path.strip_prefix(BASE_PATH_PREFIX).unwrap_or_default().to_owned();
 
@@ -67,11 +97,25 @@ impl Service<Request<Incoming>> for VssService {
 			async move {
 				match prefix_stripped_path.as_str() {
 					"/getObject" => {
-						handle_request(store, authorizer, req, "getObject", handle_get_object_request)
+						handle_request(
+							store,
+							authorizer,
+							req,
+							maximum_request_body_size,
+							"getObject",
+							handle_get_object_request,
+						)
 							.await
 					},
 					"/putObjects" => {
-						handle_request(store, authorizer, req, "putObjects", handle_put_object_request)
+						handle_request(
+							store,
+							authorizer,
+							req,
+							maximum_request_body_size,
+							"putObjects",
+							handle_put_object_request,
+						)
 							.await
 					},
 					"/deleteObject" => {
@@ -79,6 +123,7 @@ impl Service<Request<Incoming>> for VssService {
 							store,
 							authorizer,
 							req,
+							maximum_request_body_size,
 							"deleteObject",
 							handle_delete_object_request,
 						)
@@ -89,6 +134,7 @@ impl Service<Request<Incoming>> for VssService {
 							store,
 							authorizer,
 							req,
+							maximum_request_body_size,
 							"listKeyVersions",
 							handle_list_object_request,
 						)
@@ -241,7 +287,7 @@ async fn handle_request<
 	Fut: Future<Output = Result<R, VssError>> + Send,
 >(
 	store: Arc<dyn KvStore>, authorizer: Arc<dyn Authorizer>, request: Request<Incoming>,
-	operation_name: &str, handler: F,
+	maximum_request_body_size: usize, operation_name: &str, handler: F,
 ) -> Result<<VssService as Service<Request<Incoming>>>::Response, hyper::Error> {
 	let (parts, body) = request.into_parts();
 	let headers_map = parts
@@ -273,8 +319,20 @@ async fn handle_request<
 		},
 	};
 
-	// TODO: we should bound the amount of data we read to avoid allocating too much memory.
-	let bytes = body.collect().await?.to_bytes();
+	let limited_body = Limited::new(body, maximum_request_body_size);
+	let bytes = match limited_body.collect().await {
+		Ok(body) => body.to_bytes(),
+		Err(_) => {
+			Span::current().record("http.status_code", 413);
+			Span::current().record("error", true);
+			tracing::warn!(http.status_code = 413, "Request body too large");
+			return Ok(Response::builder()
+				.status(StatusCode::PAYLOAD_TOO_LARGE)
+				.body(Full::new(Bytes::from("Request body too large")))
+				// unwrap safety: body only errors when previous chained calls failed.
+				.unwrap());
+		},
+	};
 
 	// Record request body size
 	Span::current().record("http.request.body.size", bytes.len());

@@ -29,7 +29,7 @@ use auth_impls::jwt::JWTAuthorizer;
 use auth_impls::signature::SignatureValidatingAuthorizer;
 use impls::postgres_store::{PostgresPlaintextBackend, PostgresTlsBackend};
 use util::logger::ServerLogger;
-use vss_service::VssService;
+use vss_service::{VssService, VssServiceConfig};
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -39,17 +39,20 @@ mod vss_service;
 
 fn main() {
 	let args: Vec<String> = std::env::args().collect();
-	if args.len() != 2 {
-		eprintln!("Usage: {} <config-file-path>", args[0]);
-		std::process::exit(1);
-	}
-
-	let config = match util::config::load_configuration(Some(&args[1])) {
-		Ok(cfg) => cfg,
-		Err(e) => {
+	let config =
+		util::config::load_configuration(args.get(1).map(|s| s.as_str())).unwrap_or_else(|e| {
 			eprintln!("Failed to load configuration: {}", e);
-			std::process::exit(1);
+			std::process::exit(-1);
+		});
+	let vss_service_config = match config.max_request_body_size {
+		Some(size) => match VssServiceConfig::new(size) {
+			Ok(config) => config,
+			Err(e) => {
+				eprintln!("Configuration validation error: {}", e);
+				std::process::exit(-1);
+			},
 		},
+		None => VssServiceConfig::default(),
 	};
 
 	// Initialize Sentry before the tokio runtime to ensure proper Hub inheritance
@@ -175,7 +178,8 @@ fn main() {
 					match res {
 						Ok((stream, _)) => {
 							let io_stream = TokioIo::new(stream);
-							let vss_service = VssService::new(Arc::clone(&store), Arc::clone(&authorizer));
+							let vss_service =
+								VssService::new(Arc::clone(&store), Arc::clone(&authorizer), vss_service_config);
 							runtime.spawn(async move {
 								if let Err(err) = http1::Builder::new().serve_connection(io_stream, vss_service).await {
 									warn!("Failed to serve connection: {}", err);
