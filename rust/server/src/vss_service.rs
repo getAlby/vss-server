@@ -96,6 +96,10 @@ impl Service<Request<Incoming>> for VssService {
 		Box::pin(
 			async move {
 				match prefix_stripped_path.as_str() {
+					"/health" => Ok(Response::builder()
+						.status(StatusCode::OK)
+						.body(Full::new(Bytes::new()))
+						.unwrap()),
 					"/getObject" => {
 						handle_request(
 							store,
