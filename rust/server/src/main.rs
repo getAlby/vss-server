@@ -32,7 +32,6 @@ use util::logger::ServerLogger;
 use vss_service::{VssService, VssServiceConfig};
 
 use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 
 mod util;
 mod vss_service;
@@ -262,8 +261,9 @@ fn initialize_sentry(
 fn initialize_datadog(config: &util::config::DatadogConfig) {
 	if !config.is_enabled() {
 		println!("Datadog tracing is disabled");
-		// Initialize a basic subscriber without Datadog layer
-		tracing_subscriber::registry().init();
+		if let Err(e) = tracing::subscriber::set_global_default(tracing_subscriber::registry()) {
+			eprintln!("Failed to initialize tracing subscriber: {}", e);
+		}
 		return;
 	}
 
@@ -291,14 +291,17 @@ fn initialize_datadog(config: &util::config::DatadogConfig) {
 		Ok(layer) => layer,
 		Err(e) => {
 			eprintln!("Failed to initialize Datadog tracing: {}", e);
-			// Initialize a basic subscriber without Datadog layer
-			tracing_subscriber::registry().init();
+			if let Err(e) = tracing::subscriber::set_global_default(tracing_subscriber::registry()) {
+				eprintln!("Failed to initialize tracing subscriber: {}", e);
+			}
 			return;
 		},
 	};
 
 	// Initialize the tracing subscriber with the Datadog layer
-	tracing_subscriber::registry().with(layer).init();
+	if let Err(e) = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer)) {
+		eprintln!("Failed to initialize tracing subscriber with Datadog layer: {}", e);
+	}
 
 	println!(
 		"Datadog APM tracing initialized (service: {}, agent: {}, env: {}, version: {})",
