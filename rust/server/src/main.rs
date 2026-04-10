@@ -29,7 +29,7 @@ use auth_impls::jwt::JWTAuthorizer;
 use auth_impls::signature::SignatureValidatingAuthorizer;
 use impls::postgres_store::{PostgresPlaintextBackend, PostgresTlsBackend};
 use util::logger::ServerLogger;
-use vss_service::VssService;
+use vss_service::{VssService, VssServiceConfig};
 
 mod util;
 mod vss_service;
@@ -42,6 +42,16 @@ fn main() {
 			eprintln!("Failed to load configuration: {}", e);
 			std::process::exit(-1);
 		});
+	let vss_service_config = match config.max_request_body_size {
+		Some(size) => match VssServiceConfig::new(size) {
+			Ok(config) => config,
+			Err(e) => {
+				eprintln!("Configuration validation error: {}", e);
+				std::process::exit(-1);
+			},
+		},
+		None => VssServiceConfig::default(),
+	};
 
 	let logger = match ServerLogger::init(config.log_level, &config.log_file) {
 		Ok(logger) => logger,
@@ -151,7 +161,7 @@ fn main() {
 		};
 
 		let rest_svc_listener = TcpListener::bind(&config.bind_address).await.unwrap_or_else(|e| {
-			error!("Failed to bind listening port: {}", e);
+			error!("Failed to bind to address {}: {}", config.bind_address, e);
 			std::process::exit(-1);
 		});
 		info!("Listening for incoming connections on {}{}", config.bind_address, crate::vss_service::BASE_PATH_PREFIX);
@@ -162,7 +172,7 @@ fn main() {
 					match res {
 						Ok((stream, _)) => {
 							let io_stream = TokioIo::new(stream);
-							let vss_service = VssService::new(Arc::clone(&store), Arc::clone(&authorizer));
+							let vss_service = VssService::new(Arc::clone(&store), Arc::clone(&authorizer), vss_service_config);
 							runtime.spawn(async move {
 								if let Err(err) = http1::Builder::new().serve_connection(io_stream, vss_service).await {
 									warn!("Failed to serve connection: {}", err);
