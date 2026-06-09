@@ -310,7 +310,7 @@ async fn handle_request<
 		.await
 	{
 		Ok(auth_response) => {
-			tracing::info!("Authentication successful");
+			tracing::info!(user_token = %auth_response.user_token, "Authentication successful");
 			auth_response.user_token
 		},
 		Err(e) => {
@@ -329,7 +329,7 @@ async fn handle_request<
 		Err(_) => {
 			Span::current().record("http.status_code", 413);
 			Span::current().record("error", true);
-			tracing::warn!(http.status_code = 413, "Request body too large");
+			tracing::warn!(user_token = %user_token, http.status_code = 413, "Request body too large");
 			return Ok(Response::builder()
 				.status(StatusCode::PAYLOAD_TOO_LARGE)
 				.body(Full::new(Bytes::from("Request body too large")))
@@ -342,12 +342,13 @@ async fn handle_request<
 	Span::current().record("http.request.body.size", bytes.len());
 
 	match T::decode(bytes) {
-		Ok(request) => match handler(store.clone(), user_token, request).await {
+		Ok(request) => match handler(store.clone(), user_token.clone(), request).await {
 			Ok(response) => {
 				let response_bytes = response.encode_to_vec();
 				Span::current().record("http.response.body.size", response_bytes.len());
 				Span::current().record("http.status_code", 200);
 				tracing::info!(
+					user_token = %user_token,
 					http.status_code = 200,
 					operation = operation_name,
 					"Request completed successfully"
@@ -365,22 +366,22 @@ async fn handle_request<
 				match &e {
 					VssError::InternalServerError(msg) => {
 						sentry::capture_message(
-							&format!("Internal server error: {}", msg),
+							&format!("Internal server error for user_token {}: {}", user_token, msg),
 							sentry::Level::Error,
 						);
-						tracing::error!(error = %e, http.status_code = status_code, "Internal server error");
+						tracing::error!(user_token = %user_token, error = %e, http.status_code = status_code, "Internal server error");
 					},
 					VssError::NoSuchKeyError(_) => {
 						// NoSuchKeyError is a normal case when a key doesn't exist (404).
 						// Don't send these to Sentry as they're expected errors.
-						tracing::info!(error = %e, http.status_code = status_code, "Key not found");
+						tracing::info!(user_token = %user_token, error = %e, http.status_code = status_code, "Key not found");
 					},
 					_ => {
 						sentry::capture_message(
-							&format!("Request error: {}", e),
+							&format!("Request error for user_token {}: {}", user_token, e),
 							sentry::Level::Warning,
 						);
-						tracing::warn!(error = %e, http.status_code = status_code, "Request error");
+						tracing::warn!(user_token = %user_token, error = %e, http.status_code = status_code, "Request error");
 					},
 				}
 				Ok(build_error_response(e))
@@ -388,12 +389,12 @@ async fn handle_request<
 		},
 		Err(e) => {
 			sentry::capture_message(
-				&format!("Error parsing protobuf request: {}", e),
+				&format!("Error parsing protobuf request for user_token {}: {}", user_token, e),
 				sentry::Level::Warning,
 			);
 			Span::current().record("http.status_code", 400);
 			Span::current().record("error", true);
-			tracing::warn!(error = %e, http.status_code = 400, "Error parsing protobuf request");
+			tracing::warn!(user_token = %user_token, error = %e, http.status_code = 400, "Error parsing protobuf request");
 			Ok(Response::builder()
 				.status(StatusCode::BAD_REQUEST)
 				.body(Full::new(Bytes::from(b"Error parsing request".to_vec())))
