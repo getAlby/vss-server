@@ -314,10 +314,14 @@ async fn handle_request<
 			auth_response.user_token
 		},
 		Err(e) => {
-			sentry::capture_message(
-				&format!("Authentication failure: {}", e),
-				sentry::Level::Warning,
-			);
+			// Skip Sentry for AuthError: it just means the user has an invalid or
+			// expired token, which spams our alerts.
+			if !matches!(e, VssError::AuthError(_)) {
+				sentry::capture_message(
+					&format!("Authentication failure: {}", e),
+					sentry::Level::Warning,
+				);
+			}
 			tracing::warn!(error = %e, "Authentication failure");
 			return Ok(build_error_response(e));
 		},
