@@ -20,9 +20,11 @@ RUN cargo build --release --bin vss-server
 FROM debian:bookworm-slim
 
 # Install runtime dependencies
+# ca-certificates is pinned to the bookworm-security fix for the eMudhra CA
+# compromise (Oct 2026); bump deliberately when Debian ships a new version
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    ca-certificates \
+    ca-certificates=20250419~deb12u2 \
     libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
